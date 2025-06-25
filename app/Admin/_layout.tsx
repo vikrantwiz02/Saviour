@@ -1,11 +1,22 @@
 import { Colors } from "@/constants/Colors";
 import { useColorScheme } from "@/hooks/useColorScheme";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
-import { Tabs } from "expo-router";
+import { Tabs, useRouter } from "expo-router";
 import { StyleSheet, View } from "react-native";
+import { useEffect } from "react";
+import { useAuth } from "@/context/AuthContext"; // <-- Make sure this exists
 
 export default function AdminTabs() {
   const colorScheme = useColorScheme() ?? "light";
+  const { user } = useAuth();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (!user) {
+      router.replace("/login");
+    }
+  }, [user]);
+
   return (
     <Tabs
       screenOptions={{

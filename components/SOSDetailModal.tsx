@@ -4,6 +4,7 @@ import { Alert, Linking, Modal, ScrollView, StyleSheet, TouchableOpacity, View }
 import { ThemedText } from "./ThemedText"
 import { ThemedView } from "./ThemedView"
 import { IconSymbol } from "./ui/IconSymbol"
+import { getAuth } from "firebase/auth"
 
 type SOSDetailModalProps = {
   isVisible: boolean
@@ -18,6 +19,10 @@ export default function SOSDetailModal({ isVisible, sosAlert, onClose, onAccept 
 
   if (!sosAlert) return null
 
+  // Get current user UID
+  const currentUser = getAuth().currentUser
+  const currentUid = currentUser?.uid
+
   const handleCall = () => {
     if (sosAlert.senderContact) {
       Linking.openURL(`tel:${sosAlert.senderContact}`).catch(() => Alert.alert("Error", "Could not make the call."))
@@ -25,6 +30,9 @@ export default function SOSDetailModal({ isVisible, sosAlert, onClose, onAccept 
       Alert.alert("No Contact", "Sender contact information is not available.")
     }
   }
+
+  // Only show Accept & Respond if current user is NOT the sender
+  const showAcceptButton = sosAlert.userId && currentUid && sosAlert.userId !== currentUid
 
   return (
     <Modal animationType="slide" transparent={true} visible={isVisible} onRequestClose={onClose}>
@@ -80,10 +88,12 @@ export default function SOSDetailModal({ isVisible, sosAlert, onClose, onAccept 
                 <ThemedText style={s.actionButtonText}>Call Sender</ThemedText>
               </TouchableOpacity>
             )}
-            <TouchableOpacity style={[s.actionButton, s.acceptButton]} onPress={() => onAccept(sosAlert.id)}>
-              <IconSymbol name="hand.raised.fill" size={18} color={Colors.dark.text} />
-              <ThemedText style={s.actionButtonText}>Accept & Respond</ThemedText>
-            </TouchableOpacity>
+            {showAcceptButton && (
+              <TouchableOpacity style={[s.actionButton, s.acceptButton]} onPress={() => onAccept(sosAlert.id)}>
+                <IconSymbol name="hand.raised.fill" size={18} color={Colors.dark.text} />
+                <ThemedText style={s.actionButtonText}>Accept & Respond</ThemedText>
+              </TouchableOpacity>
+            )}
           </View>
         </ThemedView>
       </View>
@@ -119,7 +129,7 @@ const styles = (colorScheme: "light" | "dark") =>
     },
     detailItem: {
       flexDirection: "row",
-      alignItems: "flex-start", // Align items to start for multiline descriptions
+      alignItems: "flex-start",
       marginBottom: 15,
       paddingVertical: 5,
     },
@@ -132,7 +142,7 @@ const styles = (colorScheme: "light" | "dark") =>
     },
     detailValue: {
       fontSize: 16,
-      flex: 1, // Allow text to wrap
+      flex: 1,
       color: Colors[colorScheme].textMuted,
     },
     actionsContainer: {
@@ -148,10 +158,10 @@ const styles = (colorScheme: "light" | "dark") =>
       borderRadius: 8,
     },
     callButton: {
-      backgroundColor: Colors[colorScheme].tint, // Or a specific call color like green
+      backgroundColor: Colors[colorScheme].tint,
     },
     acceptButton: {
-      backgroundColor: "#FF3B30", // SOS Red
+      backgroundColor: "#FF3B30",
     },
     actionButtonText: {
       color: Colors.dark.text,

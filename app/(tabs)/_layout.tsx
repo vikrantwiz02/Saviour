@@ -1,11 +1,22 @@
-import { Tabs } from "expo-router"
-import { Ionicons } from "@expo/vector-icons"
-import { useColorScheme } from "@/hooks/useColorScheme"
-import { Colors } from "@/constants/Colors"
-import { Platform, View, Text, StyleSheet } from "react-native"
+import { Tabs, useRouter } from "expo-router";
+import { Ionicons } from "@expo/vector-icons";
+import { useColorScheme } from "@/hooks/useColorScheme";
+import { Colors } from "@/constants/Colors";
+import { View, StyleSheet } from "react-native";
+import { useEffect } from "react";
+import { useAuth } from "@/context/AuthContext"; // <-- Make sure this exists
 
 export default function TabLayout() {
-  const colorScheme = useColorScheme() ?? "light"
+  const colorScheme = useColorScheme() ?? "light";
+  const { user } = useAuth();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (!user) {
+      router.replace("/login");
+    }
+  }, [user]);
+
   return (
     <Tabs
       screenOptions={{
@@ -53,11 +64,11 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
-        name="requests"
+        name="chat"
         options={{
-          title: "Requests",
+          title: "Chat",
           tabBarIcon: ({ color, focused }) => (
-            <Ionicons name={focused ? "list" : "list-outline"} size={26} color={color} />
+            <Ionicons name={focused ? "chatbubbles" : "chatbubbles-outline"} size={26} color={color} />
           ),
         }}
       />
@@ -71,7 +82,7 @@ export default function TabLayout() {
         }}
       />
     </Tabs>
-  )
+  );
 }
 
 const styles = StyleSheet.create({
@@ -89,4 +100,4 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     shadowOffset: { width: 0, height: 2 },
   },
-})
+});

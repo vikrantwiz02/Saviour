@@ -1,48 +1,355 @@
-import HelpHistory from "@/components/HelpHistory"
-import StatsSummary from "@/components/StatsSummary"
-import { ThemedText } from "@/components/ThemedText"
-import { ThemedView } from "@/components/ThemedView"
-import { Colors } from "@/constants/Colors"
-import { useColorScheme } from "@/hooks/useColorScheme"
+import { useEffect, useState } from "react"
+import { Alert, Image, Platform, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View, ActivityIndicator, Modal, Pressable } from "react-native"
+import { SafeAreaView } from "react-native-safe-area-context"
+import { useRouter } from "expo-router"
 import { Ionicons } from "@expo/vector-icons"
 import * as ImagePicker from "expo-image-picker"
-import { useRouter } from "expo-router"
-import React, { useState } from "react"
-import { Alert, Image, Platform, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View } from "react-native"
-import { SafeAreaView } from "react-native-safe-area-context"
+import * as Location from "expo-location"
+import { getAuth, signOut, updatePassword, EmailAuthProvider, reauthenticateWithCredential, onAuthStateChanged, User } from "firebase/auth"
+import { doc, getDoc, updateDoc, collection, query, where, getDocs, addDoc } from "firebase/firestore"
+import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage"
+import { db } from "../../lib/firebase"
+import { Colors } from "@/constants/Colors"
+import { useColorScheme } from "@/hooks/useColorScheme"
+import { ThemedText } from "@/components/ThemedText"
+import { ThemedView } from "@/components/ThemedView"
+
+type HelpHistoryItem = {
+  id: string
+  latitude?: number
+  longitude?: number
+  emergencyType?: string
+  createdAt?: any
+  description?: string
+  [key: string]: any
+}
+
+type ModalInputProps = {
+  visible: boolean
+  title: string
+  placeholder?: string
+  secureTextEntry?: boolean
+  onCancel: () => void
+  onSubmit: (value: string) => void
+}
+
+function ModalInput({ visible, title, placeholder, secureTextEntry, onCancel, onSubmit }: ModalInputProps) {
+  const [value, setValue] = useState("")
+  useEffect(() => { setValue("") }, [visible])
+  return (
+    <Modal visible={visible} transparent animationType="fade">
+      <View style={{
+        flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: "#0008"
+      }}>
+        <View style={{
+          backgroundColor: "#fff", padding: 20, borderRadius: 10, width: "85%"
+        }}>
+          <Text style={{ fontWeight: "bold", fontSize: 18, marginBottom: 10 }}>{title}</Text>
+          <TextInput
+            placeholder={placeholder}
+            value={value}
+            onChangeText={setValue}
+            secureTextEntry={secureTextEntry}
+            style={{
+              borderWidth: 1, borderColor: "#ccc", borderRadius: 8, padding: 10, marginBottom: 15
+            }}
+            autoFocus
+          />
+          <View style={{ flexDirection: "row", justifyContent: "flex-end" }}>
+            <Pressable onPress={onCancel} style={{ marginRight: 20 }}>
+              <Text style={{ color: "#888", fontWeight: "bold" }}>Cancel</Text>
+            </Pressable>
+            <Pressable onPress={() => { onSubmit(value); setValue(""); }}>
+              <Text style={{ color: "#007aff", fontWeight: "bold" }}>OK</Text>
+            </Pressable>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  )
+}
 
 export default function ProfileScreen() {
   const colorScheme = useColorScheme() ?? "light"
   const s = styles(colorScheme)
   const router = useRouter()
+  const auth = getAuth()
 
-  const [name, setName] = useState("John Doe")
-  const [contact, setContact] = useState("+91 9876543210")
+  // Listen for auth state changes to prevent access after logout
+  const [user, setUser] = useState<User | null>(auth.currentUser)
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+      setUser(firebaseUser)
+      if (!firebaseUser) {
+        router.replace("/(auth)/login")
+      }
+    })
+    return unsubscribe
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Profile state
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [name, setName] = useState("")
+  const [contact, setContact] = useState("")
   const [medical, setMedical] = useState("")
   const [notifications, setNotifications] = useState(true)
   const [photo, setPhoto] = useState<string | null>(null)
+  const [photoUploading, setPhotoUploading] = useState(false)
+  const [blockedUsers, setBlockedUsers] = useState<string[]>([])
+  const [helpHistory, setHelpHistory] = useState<HelpHistoryItem[]>([])
 
+  // Modal state
+  const [modal, setModal] = useState<null | "changePasswordOld" | "changePasswordNew" | "blockUser" | "reportAbuse" | "unblockUser">(null)
+  const [modalCallback, setModalCallback] = useState<(value: string) => void>(() => () => {})
+  const [tempPassword, setTempPassword] = useState("")
+
+  // Current city state
+  const [currentCity, setCurrentCity] = useState<string | null>(null)
+  const [cityLoading, setCityLoading] = useState(true)
+
+  // Fetch user profile and help history
+  useEffect(() => {
+    if (!user) return
+    const fetchProfile = async () => {
+      setLoading(true)
+      try {
+        const userDoc = await getDoc(doc(db, "users", user.uid))
+        if (userDoc.exists()) {
+          const data = userDoc.data() || {}
+          setName(data.fullName || "")
+          setContact(data.contact || "")
+          setMedical(data.medical || "")
+          setNotifications(data.notifications ?? true)
+          setPhoto(data.photoUrl || null)
+          setBlockedUsers(data.blockedUsers || [])
+        }
+        // Fetch help history (SOS requests by this user)
+        const q = query(collection(db, "sos_requests"), where("userId", "==", user.uid))
+        const snap = await getDocs(q)
+        setHelpHistory(
+          snap.docs
+            .map(doc => {
+              const data = doc.data() || {}
+              return { ...data, id: doc.id } as HelpHistoryItem
+            })
+        )
+      } catch (e) {
+        Alert.alert("Error", "Failed to fetch profile or SOS requests.")
+      }
+      setLoading(false)
+    }
+    fetchProfile()
+  }, [user])
+
+  // Fetch current city using live location
+  useEffect(() => {
+    const fetchCurrentCity = async () => {
+      setCityLoading(true)
+      try {
+        let { status } = await Location.requestForegroundPermissionsAsync()
+        if (status !== "granted") {
+          setCurrentCity(null)
+          setCityLoading(false)
+          return
+        }
+        const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High })
+        const geo = await Location.reverseGeocodeAsync({
+          latitude: location.coords.latitude,
+          longitude: location.coords.longitude,
+        })
+        if (geo && geo[0] && geo[0].city) setCurrentCity(geo[0].city)
+        else setCurrentCity(null)
+      } catch (e) {
+        setCurrentCity(null)
+      }
+      setCityLoading(false)
+    }
+    fetchCurrentCity()
+  }, [])
+
+  // Save profile changes to Firestore
+  const saveProfile = async () => {
+    if (!user) return
+    setSaving(true)
+    try {
+      await updateDoc(doc(db, "users", user.uid), {
+        fullName: name,
+        contact,
+        medical,
+        notifications,
+        photoUrl: photo,
+        blockedUsers,
+      })
+      Alert.alert("Profile Updated", "Your profile has been updated.")
+    } catch (e) {
+      Alert.alert("Error", "Failed to update profile.")
+    }
+    setSaving(false)
+  }
+
+  // Pick and upload profile photo
   const pickImage = async () => {
-    let result = await ImagePicker.launchImageLibraryAsync({
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync()
+    if (status !== "granted") {
+      Alert.alert("Permission Denied", "Camera roll permissions are required.")
+      return
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
-      aspect: [1, 1],
-      quality: 0.7,
+      allowsEditing: false,
+      quality: 1,
     })
     if (!result.canceled && result.assets.length > 0) {
-      setPhoto(result.assets[0].uri)
+      const uri = result.assets[0].uri
+      setPhotoUploading(true)
+      try {
+        // Upload to Firebase Storage
+        const storage = getStorage()
+        const ext = uri.split(".").pop() || "jpg"
+        const refPath = `profile_photos/${user?.uid}.${ext}`
+        const storageRef = ref(storage, refPath)
+        const response = await fetch(uri)
+        const blob = await response.blob()
+        await uploadBytes(storageRef, blob)
+        const downloadUrl = await getDownloadURL(storageRef)
+        setPhoto(downloadUrl)
+        await updateDoc(doc(db, "users", user!.uid), { photoUrl: downloadUrl })
+      } catch (e) {
+        Alert.alert("Upload Error", "Failed to upload photo.")
+      }
+      setPhotoUploading(false)
     }
   }
 
-  const handleLogout = () => Alert.alert("Logout", "You have been logged out. (UI only)")
-  const handleChangePassword = () => Alert.alert("Change Password", "Change password flow. (UI only)")
-  const handleManageBlocked = () => Alert.alert("Blocked Users", "Manage blocked users. (UI only)")
-  const handleReportAbuse = () => Alert.alert("Report Abuse", "Report abuse flow. (UI only)")
+  // Toggle notifications and persist
+  const handleToggleNotifications = async (value: boolean) => {
+    setNotifications(value)
+    if (user) {
+      await updateDoc(doc(db, "users", user.uid), { notifications: value })
+    }
+  }
+
+  // Change password (with modal input)
+  const handleChangePassword = () => {
+    setModalCallback(() => async (oldPassword: string) => {
+      setModal(null)
+      if (!oldPassword) return
+      setTempPassword(oldPassword)
+      setTimeout(() => {
+        setModalCallback(() => async (newPassword: string) => {
+          setModal(null)
+          if (!newPassword) return
+          try {
+            if (!user?.email) throw new Error("No email found")
+            const credential = EmailAuthProvider.credential(user.email, oldPassword)
+            await reauthenticateWithCredential(user, credential)
+            await updatePassword(user, newPassword)
+            Alert.alert("Success", "Password changed successfully.")
+          } catch (e: any) {
+            Alert.alert("Error", e.message || "Failed to change password.")
+          }
+        })
+        setModal("changePasswordNew")
+      }, 300)
+    })
+    setModal("changePasswordOld")
+  }
+
+  // Logout
+  const handleLogout = async () => {
+    try {
+      await signOut(auth)
+      // onAuthStateChanged will handle redirect
+    } catch (e) {
+      Alert.alert("Logout Failed", "Could not log out. Try again.")
+    }
+  }
+
+  // Blocked users management (add/remove)
+  const handleManageBlocked = () => {
+    Alert.alert(
+      "Blocked Users",
+      "What do you want to do?",
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Block User", onPress: () => {
+          setModalCallback(() => async (email: string) => {
+            setModal(null)
+            if (!email) return
+            if (blockedUsers.includes(email)) {
+              Alert.alert("Already Blocked", "This user is already blocked.")
+              return
+            }
+            const updated = [...blockedUsers, email]
+            setBlockedUsers(updated)
+            if (user) await updateDoc(doc(db, "users", user.uid), { blockedUsers: updated })
+            Alert.alert("Blocked", `${email} has been blocked.`)
+          })
+          setModal("blockUser")
+        }},
+        { text: "Unblock User", onPress: () => {
+          setModalCallback(() => async (email: string) => {
+            setModal(null)
+            if (!email) return
+            if (!blockedUsers.includes(email)) {
+              Alert.alert("Not Blocked", "This user is not blocked.")
+              return
+            }
+            const updated = blockedUsers.filter(u => u !== email)
+            setBlockedUsers(updated)
+            if (user) await updateDoc(doc(db, "users", user.uid), { blockedUsers: updated })
+            Alert.alert("Unblocked", `${email} has been unblocked.`)
+          })
+          setModal("unblockUser")
+        }},
+      ]
+    )
+  }
+
+  // Report abuse (with modal input)
+  const handleReportAbuse = () => {
+    setModalCallback(() => async (desc: string) => {
+      setModal(null)
+      if (!desc) return
+      try {
+        await addDoc(collection(db, "abuse_reports"), {
+          userId: user?.uid,
+          description: desc,
+          createdAt: new Date().toISOString(),
+        })
+        Alert.alert("Reported", "Thank you for reporting. We'll review your report.")
+      } catch (e) {
+        Alert.alert("Error", "Failed to submit report.")
+      }
+    })
+    setModal("reportAbuse")
+  }
+
+  if (!user || loading) {
+    return (
+      <SafeAreaView style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
+        <ActivityIndicator size="large" color={Colors[colorScheme].tint} />
+      </SafeAreaView>
+    )
+  }
 
   return (
     <SafeAreaView style={{ flex: 1 }} edges={["top", "left", "right"]}>
       <ScrollView contentContainerStyle={{ flexGrow: 1 }}>
         <ThemedView style={s.container}>
+          {/* Current City */}
+          <View style={{ alignItems: "center", marginBottom: 12 }}>
+            <ThemedText style={{ fontSize: 16, color: Colors[colorScheme].tint }}>
+              {cityLoading
+                ? "Detecting your current city..."
+                : currentCity
+                  ? `Current City: ${currentCity}`
+                  : "Current city not available"}
+            </ThemedText>
+          </View>
+
           {/* Profile Photo */}
           <TouchableOpacity style={s.photoContainer} onPress={pickImage} activeOpacity={0.7}>
             {photo ? (
@@ -53,27 +360,20 @@ export default function ProfileScreen() {
                 <ThemedText style={s.photoEditText}>Edit</ThemedText>
               </View>
             )}
+            {photoUploading && <ActivityIndicator size="small" color={Colors[colorScheme].tint} style={{ marginTop: 8 }} />}
           </TouchableOpacity>
 
           {/* Settings & Notifications Buttons */}
           <View style={s.topButtonsRow}>
             <TouchableOpacity
               style={s.iconBtn}
-              onPress={() => router.push("/settings")}
+              onPress={saveProfile}
               accessibilityRole="button"
-              accessibilityLabel="Open Settings"
+              accessibilityLabel="Save Profile"
+              disabled={saving}
             >
-              <Ionicons name="settings" size={22} color={Colors[colorScheme].tint} />
-              <Text style={s.iconBtnText}>Settings</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={s.iconBtn}
-              onPress={() => router.push("/notifications")}
-              accessibilityRole="button"
-              accessibilityLabel="Open Notifications"
-            >
-              <Ionicons name="notifications" size={22} color={Colors[colorScheme].tint} />
-              <Text style={s.iconBtnText}>Notifications</Text>
+              <Ionicons name="save" size={22} color={Colors[colorScheme].tint} />
+              <Text style={s.iconBtnText}>{saving ? "Saving..." : "Save"}</Text>
             </TouchableOpacity>
           </View>
 
@@ -115,7 +415,7 @@ export default function ProfileScreen() {
             <ThemedText style={s.label}>Notifications</ThemedText>
             <Switch
               value={notifications}
-              onValueChange={setNotifications}
+              onValueChange={handleToggleNotifications}
               thumbColor={notifications ? Colors[colorScheme].tint : "#ccc"}
               trackColor={{ false: "#ccc", true: Colors[colorScheme].tint + "55" }}
             />
@@ -143,10 +443,67 @@ export default function ProfileScreen() {
             </TouchableOpacity>
           </View>
 
-          {/* Stats & History */}
-          <StatsSummary />
-          <HelpHistory />
+          {/* Stats & Help History */}
+          <View style={{ marginTop: 20 }}>
+            <ThemedText style={s.label}>Help History</ThemedText>
+            {helpHistory.length === 0 ? (
+              <ThemedText style={{ color: Colors[colorScheme].textMuted }}>No SOS requests yet.</ThemedText>
+            ) : (
+              helpHistory.map((item) => (
+                <View key={item.id} style={{ marginBottom: 10, padding: 10, backgroundColor: Colors[colorScheme].inputBackground, borderRadius: 8 }}>
+                  <ThemedText style={{ fontWeight: "bold" }}>{item.emergencyType || "Unknown"}</ThemedText>
+                  <ThemedText>
+                    Date: {item.createdAt?.toDate ? item.createdAt.toDate().toLocaleString() : (item.createdAt || "N/A")}
+                  </ThemedText>
+                  <ThemedText>Description: {item.description || "N/A"}</ThemedText>
+                  <ThemedText>
+                    Location: {typeof item.latitude === "number" && typeof item.longitude === "number"
+                      ? `${item.latitude}, ${item.longitude}`
+                      : "N/A"}
+                  </ThemedText>
+                </View>
+              ))
+            )}
+          </View>
         </ThemedView>
+        {/* Modals for text input */}
+        <ModalInput
+          visible={modal === "changePasswordOld"}
+          title="Enter Current Password"
+          placeholder="Current Password"
+          secureTextEntry
+          onCancel={() => setModal(null)}
+          onSubmit={modalCallback}
+        />
+        <ModalInput
+          visible={modal === "changePasswordNew"}
+          title="Enter New Password"
+          placeholder="New Password"
+          secureTextEntry
+          onCancel={() => setModal(null)}
+          onSubmit={modalCallback}
+        />
+        <ModalInput
+          visible={modal === "blockUser"}
+          title="Block User"
+          placeholder="User Email"
+          onCancel={() => setModal(null)}
+          onSubmit={modalCallback}
+        />
+        <ModalInput
+          visible={modal === "unblockUser"}
+          title="Unblock User"
+          placeholder="User Email"
+          onCancel={() => setModal(null)}
+          onSubmit={modalCallback}
+        />
+        <ModalInput
+          visible={modal === "reportAbuse"}
+          title="Report Abuse"
+          placeholder="Describe the issue"
+          onCancel={() => setModal(null)}
+          onSubmit={modalCallback}
+        />
       </ScrollView>
     </SafeAreaView>
   )

@@ -1,617 +1,792 @@
-import { Colors } from "@/constants/Colors";
 import { useColorScheme } from "@/hooks/useColorScheme";
-import { FontAwesome5, Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import { Ionicons, MaterialCommunityIcons, FontAwesome, Feather } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-import React from "react";
+import React, { useState, useEffect } from "react";
 import {
+  Alert,
   Dimensions,
-  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
-  View
+  View,
+  ActivityIndicator,
+  Image,
+  ScrollView,
+  RefreshControl,
+  Platform,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import * as Location from "expo-location";
+import axios from "axios";
+import { collection, getDocs, query, orderBy, doc, getDoc, where } from "firebase/firestore";
+import { db } from "../../lib/firebase";
+import { useAuth } from "@/context/AuthContext";
+import MapView, { Heatmap, PROVIDER_GOOGLE } from "react-native-maps";
+import { LinearGradient } from "expo-linear-gradient";
+import Animated, { FadeIn } from "react-native-reanimated";
 
 const { width } = Dimensions.get("window");
 const isTablet = width >= 768;
 
-// Mock weather/disaster widget data
-const weather = {
-  region: "Central HQ",
-  temp: 32,
-  condition: "Sunny",
-  wind: 18,
-  alert: "Storm Watch: North Zone",
-  icon: "weather-sunny",
-  risk: "Moderate",
-  riskColor: "#fbbf24",
+type SOSRequest = {
+  id: string;
+  title: string;
+  description: string;
+  urgency: "High" | "Medium" | "Low";
+  type: string;
+  location: { latitude: number; longitude: number };
+  createdAt: string;
+  userId: string;
+  status: string;
+  isPublic?: boolean;
 };
 
-// Mock stats
-const stats = [
-  {
-    label: "Active SOS",
-    value: 12,
-    icon: "alert-circle",
-    color: "#ff5252",
-    tag: "High",
-    trend: [2, 4, 3, 5, 6, 8, 12],
-  },
-  {
-    label: "Resolved Today",
-    value: 21,
-    icon: "checkmark-circle",
-    color: "#22c55e",
-    tag: "Safe",
-    trend: [1, 2, 3, 4, 6, 10, 21],
-  },
-  {
-    label: "Online Responders",
-    value: 34,
-    icon: "people",
-    color: "#3b82f6",
-    tag: "Online",
-    trend: [10, 12, 18, 22, 28, 32, 34],
-  },
-  {
-    label: "Flagged Reports",
-    value: 3,
-    icon: "flag",
-    color: "#fbbf24",
-    tag: "Review",
-    trend: [1, 1, 2, 2, 3, 3, 3],
-  },
-];
+type QuickAction = {
+  id: string;
+  title: string;
+  icon: string;
+  color: string;
+  route: string;
+  iconSet: "Ionicons" | "MaterialCommunityIcons" | "FontAwesome" | "Feather";
+};
 
-// Mock responder status by region
-const responderStatus = [
-  { region: "North", online: 8, offline: 2 },
-  { region: "South", online: 6, offline: 3 },
-  { region: "East", online: 7, offline: 1 },
-  { region: "West", online: 5, offline: 4 },
-];
+type NewsItem = {
+  id: string;
+  title: string;
+  summary: string;
+  date: string;
+  type: "tip" | "news" | "tutorial";
+};
 
-// Mock regional breakdown
-const regionalCases = [
-  { region: "North", active: 4, resolved: 12 },
-  { region: "South", active: 2, resolved: 8 },
-  { region: "East", active: 3, resolved: 10 },
-  { region: "West", active: 3, resolved: 9 },
-];
+const NotificationIcon = ({
+  unseenCount,
+  onPress,
+  theme,
+}: {
+  unseenCount: number;
+  onPress: () => void;
+  theme: string;
+}) => (
+  <TouchableOpacity onPress={onPress} style={{ marginLeft: 12 }}>
+    <Ionicons name="notifications-outline" size={30} color={theme === "dark" ? "#fff" : "#222"} />
+    {unseenCount > 0 && (
+      <View
+        style={{
+          position: "absolute",
+          right: -2,
+          top: -2,
+          backgroundColor: "#f43f5e",
+          borderRadius: 8,
+          paddingHorizontal: 5,
+          paddingVertical: 1,
+          minWidth: 16,
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <Text style={{ color: "#fff", fontSize: 11, fontWeight: "bold" }}>{unseenCount}</Text>
+      </View>
+    )}
+  </TouchableOpacity>
+);
 
-// Mock admin actions
-const adminActions = [
-  { id: 1, action: "Suspended user Carol Lee", time: "2025-06-19 10:15" },
-  { id: 2, action: "Broadcasted alert to all users", time: "2025-06-19 09:50" },
-  { id: 3, action: "Promoted Bob Singh to Employee", time: "2025-06-18 18:30" },
-];
-
-// Mock notification summary
-const notifications = [
-  { id: 1, type: "Moderation", message: "2 unresolved reports", critical: true },
-  { id: 2, type: "System", message: "Pending system update", critical: false },
-  { id: 3, type: "SOS", message: "1 critical SOS unresolved", critical: true },
-];
-
-// Quick actions
-const quickActions = [
-  {
-    label: "Broadcast Alert",
-    icon: "bullhorn",
-    color: "#ef4444",
-    route: "/Admin/notifications",
-  },
-  {
-    label: "Manage Types",
-    icon: "layers",
-    color: "#3b82f6",
-    route: "/Admin/settings",
-  },
-  {
-    label: "Flagged Users",
-    icon: "flag",
-    color: "#fbbf24",
-    route: "/Admin/management",
-  },
-  {
-    label: "Moderation",
-    icon: "shield-alert",
-    color: "#a21caf",
-    route: "/Admin/moderation",
-  },
-];
-
-function MiniTrend({ data, color }: { data: number[]; color: string }) {
-  const max = Math.max(...data, 1);
-  return (
-    <View style={{ flexDirection: "row", alignItems: "flex-end", height: 24 }}>
-      {data.map((v, i) => (
-        <View
-          key={i}
-          style={{
-            width: 4,
-            height: `${(v / max) * 100}%`,
-            backgroundColor: color,
-            borderRadius: 2,
-            marginRight: 2,
-            opacity: 0.7,
-          }}
-        />
-      ))}
-    </View>
-  );
-}
-
-export default function AdminDashboard() {
+export default function HomeScreen() {
   const colorScheme = useColorScheme() ?? "light";
+  const [sosRequests, setSosRequests] = useState<SOSRequest[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [notifCount, setNotifCount] = useState(0);
+  const [weather, setWeather] = useState<any>(null);
+  const [location, setLocation] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [profile, setProfile] = useState<any>(null);
+  const [heatmapData, setHeatmapData] = useState<any[]>([]);
+  const [sosRaisedCount, setSosRaisedCount] = useState(0);
   const router = useRouter();
+  const { user } = useAuth();
+
+  // Quick actions configuration
+  const quickActions: QuickAction[] = [
+    {
+      id: "1",
+      title: "Create SOS",
+      icon: "plus-circle",
+      color: "#ef4444",
+      route: "/sos",
+      iconSet: "Feather",
+    },
+    {
+      id: "2",
+      title: "View Map",
+      icon: "map",
+      color: "#3b82f6",
+      route: "/map",
+      iconSet: "Feather",
+    },
+    {
+      id: "3",
+      title: "Resources",
+      icon: "book",
+      color: "#10b981",
+      route: "/resources",
+      iconSet: "Feather",
+    },
+    {
+      id: "4",
+      title: "Community",
+      icon: "users",
+      color: "#f59e0b",
+      route: "/chat",
+      iconSet: "Feather",
+    },
+  ];
+
+  // Sample news and tips
+  const [newsFeed, setNewsFeed] = useState<NewsItem[]>([]);
+
+  // Fetch all data
+  const fetchAll = async () => {
+    try {
+      let { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert("Permission required", "Location permission is needed for app functionality.");
+        return;
+      }
+      let loc = await Location.getCurrentPositionAsync({});
+      setLocation({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
+
+      // Fetch weather
+      const apiKey = "475dad9f469397c42f28ed2ce92b2537";
+      try {
+        const weatherResp = await axios.get(
+          `https://api.openweathermap.org/data/2.5/weather?lat=${loc.coords.latitude}&lon=${loc.coords.longitude}&units=metric&appid=${apiKey}`
+        );
+        setWeather(weatherResp.data);
+      } catch (err) {
+        console.log("Weather error:", err);
+      }
+
+      // Fetch profile
+      if (user) {
+        const docSnap = await getDoc(doc(db, "users", user.uid));
+        if (docSnap.exists()) setProfile(docSnap.data());
+      }
+
+      // Fetch SOS requests
+      await fetchSOS();
+      // Fetch SOS raised count for current user
+      await fetchSosRaisedCount();
+    } catch (e) {
+      console.error("Error fetching data:", e);
+    }
+  };
+
+  // Fetch SOS requests (all public)
+  const fetchSOS = async () => {
+    setLoading(true);
+    try {
+      const q = query(collection(db, "sos_requests"), orderBy("createdAt", "desc"));
+      const querySnapshot = await getDocs(q);
+      const requests: SOSRequest[] = [];
+      querySnapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        requests.push({
+          id: docSnap.id,
+          title: data.title || data.emergencyType || "SOS",
+          description: data.description,
+          urgency: data.urgency,
+          type: data.type || data.emergencyType || "General",
+          location: {
+            latitude: data.latitude,
+            longitude: data.longitude,
+          },
+          createdAt: data.createdAt,
+          userId: data.userId,
+          status: data.status || "new",
+          isPublic: data.isPublic,
+        });
+      });
+      // Only show public SOS to everyone
+      setSosRequests(requests.filter(r => r.isPublic !== false));
+      setNotifCount(requests.filter(r => r.status === "new" && r.isPublic !== false).length);
+
+      // Generate heatmap data
+      if (requests.length > 0) {
+        const heatmapPoints = requests.map(request => ({
+          latitude: request.location.latitude,
+          longitude: request.location.longitude,
+          weight: request.urgency === "High" ? 0.8 : request.urgency === "Medium" ? 0.5 : 0.3
+        }));
+        setHeatmapData(heatmapPoints);
+      }
+    } catch (e) {
+      console.error("Error fetching SOS requests:", e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Fetch SOS raised count for current user
+  const fetchSosRaisedCount = async () => {
+    if (!user) return;
+    try {
+      const q = query(
+        collection(db, "sos_requests"),
+        where("userId", "==", user.uid),
+        where("isPublic", "==", true)
+      );
+      const querySnapshot = await getDocs(q);
+      setSosRaisedCount(querySnapshot.size);
+    } catch (e) {
+      setSosRaisedCount(0);
+    }
+  };
+
+  useEffect(() => {
+    fetchAll();
+  }, []);
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await fetchAll();
+    setRefreshing(false);
+  };
+
+  const greeting = () => {
+    const hour = new Date().getHours();
+    if (hour < 12) return "Good morning";
+    if (hour < 18) return "Good afternoon";
+    return "Good evening";
+  };
+
+  const renderIcon = (iconSet: string, iconName: string, size: number, color: string) => {
+    switch (iconSet) {
+      case "Ionicons":
+        return <Ionicons name={iconName as any} size={size} color={color} />;
+      case "MaterialCommunityIcons":
+        return <MaterialCommunityIcons name={iconName as any} size={size} color={color} />;
+      case "FontAwesome":
+        return <FontAwesome name={iconName as any} size={size} color={color} />;
+      case "Feather":
+        return <Feather name={iconName as any} size={size} color={color} />;
+      default:
+        return <Ionicons name="alert-circle" size={size} color={color} />;
+    }
+  };
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: Colors[colorScheme].background }}>
-      <ScrollView contentContainerStyle={{ padding: isTablet ? 32 : 16, paddingBottom: 40 }}>
-        {/* Top Bar with Settings & Notifications */}
-        <View style={styles.topBar}>
-          <Text style={styles.title}>Admin Dashboard</Text>
-          <View style={styles.topIcons}>
-            <TouchableOpacity
-              onPress={() => router.push("/Admin-Notifications")}
-              style={styles.iconBtn}
-              accessibilityLabel="Push Notifications"
-            >
-              <Ionicons name="notifications" size={26} color={Colors[colorScheme].tint} />
-            </TouchableOpacity>
-            <TouchableOpacity
-              onPress={() => router.push("/Admin-Settings")}
-              style={styles.iconBtn}
-              accessibilityLabel="Settings"
-            >
-              <Ionicons name="settings" size={26} color={Colors[colorScheme].tint} />
-            </TouchableOpacity>
+    <SafeAreaView style={{ flex: 1, backgroundColor: colorScheme === "dark" ? "#181a20" : "#fff" }}>
+      <ScrollView
+        style={{ flex: 1 }}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+        contentContainerStyle={{ paddingHorizontal: isTablet ? 40 : 16, paddingBottom: 40, flexGrow: 1 }}
+        alwaysBounceVertical
+      >
+        {/* Header with greeting and notification */}
+        <Animated.View entering={FadeIn.duration(600)}>
+          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 18, marginBottom: 8 }}>
+            <Text style={{ fontSize: isTablet ? 28 : 22, fontWeight: "bold", color: colorScheme === "dark" ? "#fff" : "#222" }}>
+              {greeting()}{profile?.fullName ? `, ${profile.fullName}` : user?.email ? `, ${user.email.split('@')[0]}` : ""}!
+            </Text>
+            <NotificationIcon
+              unseenCount={notifCount}
+              onPress={() => router.push("/notifications")}
+              theme={colorScheme}
+            />
           </View>
-        </View>
+        </Animated.View>
 
-        {/* Weather & Disaster Risk Widget */}
-        <View style={[
-          styles.weatherWidget,
-          { backgroundColor: colorScheme === "dark" ? "#23272e" : "#fff" },
-        ]}>
-          <MaterialCommunityIcons name={weather.icon as any} size={isTablet ? 48 : 32} color="#fbbf24" />
-          <View style={{ flex: 1, marginLeft: 12 }}>
-            <Text style={styles.weatherRegion}>{weather.region}</Text>
-            <Text style={styles.weatherTemp}>{weather.temp}°C · {weather.condition}</Text>
-            <Text style={styles.weatherWind}>Wind: {weather.wind} km/h</Text>
-            <View style={[styles.riskTag, { backgroundColor: weather.riskColor + "22" }]}>
-              <Text style={[styles.riskTagText, { color: weather.riskColor }]}>Risk: {weather.risk}</Text>
+        {/* Profile Summary */}
+        <Animated.View entering={FadeIn.delay(100).duration(600)}>
+          <LinearGradient
+            colors={colorScheme === "dark"
+              ? ["#23272e", "#181a20"]
+              : ["#f3f4f6", "#fff"]}
+            style={{
+              borderRadius: 16,
+              padding: 16,
+              marginBottom: 16,
+              flexDirection: "row",
+              alignItems: "center"
+            }}
+          >
+            <Image
+              source={profile?.photo ? { uri: profile.photo } : require("../../assets/images/default-avatar.png")}
+              style={{ width: 56, height: 56, borderRadius: 28, marginRight: 14 }}
+            />
+            <View style={{ flex: 1 }}>
+              {profile ? (
+                <>
+                  <Text style={{ fontWeight: "bold", fontSize: 17, color: colorScheme === "dark" ? "#fff" : "#222" }}>
+                    {profile.fullName}
+                  </Text>
+                  <Text style={{ color: "#888" }}>{profile.city || "Unknown location"}</Text>
+                  <Text style={{ color: "#888" }}>{profile.role ? profile.role.toUpperCase() : "USER"}</Text>
+                </>
+              ) : (
+                <Text style={{ color: "#888" }}>Loading profile...</Text>
+              )}
             </View>
-          </View>
-          <View style={{ alignItems: "flex-end" }}>
-            <MaterialCommunityIcons name="alert" size={22} color="#ef4444" />
-            <Text style={styles.weatherAlert}>{weather.alert}</Text>
-          </View>
-        </View>
+          </LinearGradient>
+        </Animated.View>
 
-        {/* Stats Cards */}
-        <View style={[
-          styles.grid,
-          isTablet && { flexDirection: "row", flexWrap: "wrap", gap: 24 },
-        ]}>
-          {stats.map((stat, i) => (
-            <View
-              key={stat.label}
-              style={[
-                isTablet
-                  ? { width: "47%", marginBottom: 24 }
-                  : { width: "100%", marginBottom: 16 },
-              ]}
-            >
-              <View style={[
-                styles.card,
-                {
+        {/* Weather Card */}
+        <Animated.View entering={FadeIn.delay(200).duration(600)}>
+          <LinearGradient
+            colors={colorScheme === "dark"
+              ? ["#23272e", "#23272e"]
+              : ["#fffbe6", "#fff"]}
+            style={{
+              borderRadius: 16,
+              padding: 16,
+              marginBottom: 16,
+              borderWidth: 1,
+              borderColor: colorScheme === "dark" ? "#444" : "#fbbf24",
+            }}
+          >
+            {weather ? (
+              <View style={{ flexDirection: "row", alignItems: "center" }}>
+                <Ionicons
+                  name={weather.weather[0].main.includes("Rain") ? "rainy" :
+                    weather.weather[0].main.includes("Cloud") ? "cloudy" : "sunny"}
+                  size={40}
+                  color={colorScheme === "dark" ? "#ffd700" : "#f59e0b"}
+                />
+                <View style={{ marginLeft: 14 }}>
+                  <Text style={{ fontSize: isTablet ? 32 : 22, fontWeight: "bold", color: colorScheme === "dark" ? "#ffd700" : "#f59e42" }}>
+                    {Math.round(weather.main.temp)}°C
+                  </Text>
+                  <Text style={{ fontSize: isTablet ? 18 : 15, color: colorScheme === "dark" ? "#fff" : "#b08900" }}>
+                    {weather.weather[0].main}, {weather.name}
+                  </Text>
+                </View>
+              </View>
+            ) : (
+              <View style={{ flexDirection: "row", alignItems: "center" }}>
+                <ActivityIndicator size="small" color={colorScheme === "dark" ? "#fff" : "#888"} />
+                <Text style={{ marginLeft: 10, color: "#888" }}>Loading weather...</Text>
+              </View>
+            )}
+          </LinearGradient>
+        </Animated.View>
+
+        {/* Quick Actions Grid */}
+        <Animated.View entering={FadeIn.delay(300).duration(600)}>
+          <Text style={{
+            fontWeight: "600",
+            fontSize: 16,
+            marginBottom: 12,
+            color: colorScheme === "dark" ? "#fff" : "#222"
+          }}>
+            Quick Actions
+          </Text>
+          <View style={{
+            flexDirection: "row",
+            flexWrap: "wrap",
+            justifyContent: "space-between",
+            gap: 12
+          }}>
+            {quickActions.map((action) => (
+              <TouchableOpacity
+                key={action.id}
+                style={{
+                  width: isTablet ? "48%" : "48%",
                   backgroundColor: colorScheme === "dark" ? "#23272e" : "#fff",
-                  shadowColor: colorScheme === "dark" ? "#000" : "#aaa",
-                }
-              ]}>
-                <View style={styles.cardRow}>
-                  <Ionicons name={stat.icon as any} size={isTablet ? 38 : 28} color={stat.color} style={{ marginRight: 10 }} />
-                  <View>
-                    <Text style={[styles.cardValue, { color: stat.color }]}>{stat.value}</Text>
-                    <Text style={[styles.cardLabel, { color: colorScheme === "dark" ? "#fff" : "#222" }]}>{stat.label}</Text>
-                  </View>
-                </View>
-                <View style={{ flexDirection: "row", alignItems: "center", marginTop: 8 }}>
-                  <MiniTrend data={stat.trend} color={stat.color} />
-                  <View style={[styles.tag, { backgroundColor: stat.color + "22" }]}>
-                    <Text style={[styles.tagText, { color: stat.color }]}>{stat.tag}</Text>
-                  </View>
-                </View>
-              </View>
-            </View>
-          ))}
-        </View>
-
-        {/* Responder Status Overview */}
-        <View style={[
-          styles.sectionCard,
-          { backgroundColor: colorScheme === "dark" ? "#23272e" : "#fff" },
-        ]}>
-          <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 8 }}>
-            <FontAwesome5 name="user-shield" size={18} color="#3b82f6" />
-            <Text style={styles.sectionTitle}>Responder Status by Region</Text>
-          </View>
-          <View style={styles.responderTable}>
-            <View style={styles.responderRowHeader}>
-              <Text style={styles.responderCellHeader}>Region</Text>
-              <Text style={styles.responderCellHeader}>Online</Text>
-              <Text style={styles.responderCellHeader}>Offline</Text>
-            </View>
-            {responderStatus.map((r) => (
-              <View key={r.region} style={styles.responderRow}>
-                <Text style={styles.responderCell}>{r.region}</Text>
-                <Text style={[styles.responderCell, { color: "#22c55e" }]}>{r.online}</Text>
-                <Text style={[styles.responderCell, { color: "#ef4444" }]}>{r.offline}</Text>
-              </View>
-            ))}
-          </View>
-        </View>
-
-        {/* Regional Breakdown */}
-        <View style={[
-          styles.sectionCard,
-          { backgroundColor: colorScheme === "dark" ? "#23272e" : "#fff" },
-        ]}>
-          <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 8 }}>
-            <MaterialCommunityIcons name="map-marker-radius" size={20} color="#fbbf24" />
-            <Text style={styles.sectionTitle}>Regional Breakdown</Text>
-          </View>
-          <View style={isTablet ? styles.regionGridTablet : {}}>
-            {regionalCases.map((zone) => (
-              <TouchableOpacity
-                key={zone.region}
-                style={[
-                  styles.regionCard,
-                  { backgroundColor: "#f8fafc", borderColor: "#eee" },
-                  isTablet && { minWidth: 180, maxWidth: 220 },
-                ]}
-                onPress={() => router.push(`/Admin/management?region=${zone.region}`)}
-                activeOpacity={0.8}
+                  borderRadius: 12,
+                  padding: 16,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  borderWidth: 1,
+                  borderColor: colorScheme === "dark" ? "#444" : "#e5e7eb",
+                  shadowColor: "#000",
+                  shadowOffset: { width: 0, height: 2 },
+                  shadowOpacity: 0.1,
+                  shadowRadius: 4,
+                  elevation: 2,
+                  marginBottom: 8,
+                }}
+                onPress={() => {
+                  router.push(action.route as any);
+                }}
               >
-                <Text style={styles.regionName}>{zone.region}</Text>
-                <View style={{ flexDirection: "row", alignItems: "center", marginTop: 6 }}>
-                  <Ionicons name="alert-circle" size={18} color="#ef4444" />
-                  <Text style={styles.regionStat}>Active: {zone.active}</Text>
-                  <Ionicons name="checkmark-circle" size={18} color="#22c55e" style={{ marginLeft: 10 }} />
-                  <Text style={styles.regionStat}>Resolved: {zone.resolved}</Text>
-                </View>
+                {renderIcon(action.iconSet, action.icon, 28, action.color)}
+                <Text style={{
+                  marginTop: 8,
+                  fontWeight: "600",
+                  color: colorScheme === "dark" ? "#fff" : "#222",
+                  textAlign: "center"
+                }}>
+                  {action.title}
+                </Text>
               </TouchableOpacity>
             ))}
           </View>
-        </View>
+        </Animated.View>
 
-        {/* Recent Admin Actions */}
-        <View style={[
-          styles.sectionCard,
-          { backgroundColor: colorScheme === "dark" ? "#23272e" : "#fff" },
-        ]}>
-          <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 8 }}>
-            <MaterialCommunityIcons name="history" size={20} color="#2563eb" />
-            <Text style={styles.sectionTitle}>Recent Admin Actions</Text>
-          </View>
-          {adminActions.map((a) => (
-            <View key={a.id} style={styles.actionRow}>
-              <Ionicons name="checkmark-done-circle" size={18} color="#2563eb" />
-              <Text style={styles.actionText}>{a.action}</Text>
-              <Text style={styles.actionTime}>{a.time}</Text>
-            </View>
-          ))}
-        </View>
-
-        {/* Quick Actions */}
-        <View style={[
-          styles.sectionCard,
-          { backgroundColor: colorScheme === "dark" ? "#23272e" : "#fff" },
-        ]}>
-          <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 8 }}>
-            <MaterialCommunityIcons name="lightning-bolt" size={20} color="#ef4444" />
-            <Text style={styles.sectionTitle}>Quick Actions</Text>
-          </View>
-          <View style={isTablet ? styles.quickGridTablet : styles.quickGrid}>
-            {quickActions.map((q) => (
-              <TouchableOpacity
-                key={q.label}
-                style={[styles.quickBtn, { backgroundColor: q.color + "22" }]}
-                onPress={() => router.push(q.route as any)}
-                activeOpacity={0.85}
+        {/* Nearby Emergency Heatmap Preview */}
+        <Animated.View entering={FadeIn.delay(400).duration(600)}>
+          <Text style={{
+            fontWeight: "600",
+            fontSize: 16,
+            marginBottom: 12,
+            color: colorScheme === "dark" ? "#fff" : "#222"
+          }}>
+            Nearby Emergency Heatmap
+          </Text>
+          <View style={{
+            backgroundColor: colorScheme === "dark" ? "#23272e" : "#fff",
+            borderRadius: 16,
+            height: 200,
+            overflow: "hidden",
+            borderWidth: 1,
+            borderColor: colorScheme === "dark" ? "#444" : "#e5e7eb",
+          }}>
+            {location ? (
+              <MapView
+                style={{ flex: 1 }}
+                provider={PROVIDER_GOOGLE}
+                initialRegion={{
+                  latitude: location.latitude,
+                  longitude: location.longitude,
+                  latitudeDelta: 0.0922,
+                  longitudeDelta: 0.0421,
+                }}
+                scrollEnabled={false}
+                zoomEnabled={false}
+                pitchEnabled={false}
+                rotateEnabled={false}
               >
-                <MaterialCommunityIcons name={q.icon as any} size={28} color={q.color} />
-                <Text style={[styles.quickLabel, { color: q.color }]}>{q.label}</Text>
-              </TouchableOpacity>
-            ))}
+                {heatmapData.length > 0 && (
+                  <Heatmap
+                    points={heatmapData}
+                    opacity={1}
+                    radius={50}
+                    gradient={{
+                      colors: ["#00f", "#0ff", "#0f0", "#ff0", "#f00"],
+                      startPoints: [0.01, 0.25, 0.5, 0.75, 1],
+                      colorMapSize: 256
+                    }}
+                  />
+                )}
+              </MapView>
+            ) : (
+              <View style={{
+                flex: 1,
+                justifyContent: "center",
+                alignItems: "center",
+                backgroundColor: colorScheme === "dark" ? "#1e1e1e" : "#f3f4f6"
+              }}>
+                <ActivityIndicator size="small" color={colorScheme === "dark" ? "#fff" : "#888"} />
+                <Text style={{ marginTop: 8, color: "#888" }}>Loading map...</Text>
+              </View>
+            )}
           </View>
-        </View>
+        </Animated.View>
 
-        {/* Notification Summary */}
-        <View style={[
-          styles.sectionCard,
-          { backgroundColor: colorScheme === "dark" ? "#23272e" : "#fff" },
-        ]}>
-          <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 8 }}>
-            <Ionicons name="notifications" size={20} color="#ef4444" />
-            <Text style={styles.sectionTitle}>Notification Summary</Text>
+        {/* My Activity Summary */}
+        <Animated.View entering={FadeIn.delay(500).duration(600)}>
+          <Text style={{
+            fontWeight: "600",
+            fontSize: 16,
+            marginBottom: 12,
+            color: colorScheme === "dark" ? "#fff" : "#222"
+          }}>
+            My Activity Summary
+          </Text>
+          <View style={{
+            flexDirection: "row",
+            justifyContent: "space-between",
+            gap: 12
+          }}>
+            {/* SOS Raised Card */}
+            <View style={{
+              flex: 1,
+              backgroundColor: colorScheme === "dark" ? "#23272e" : "#fff",
+              borderRadius: 12,
+              padding: 16,
+              borderWidth: 1,
+              borderColor: colorScheme === "dark" ? "#444" : "#e5e7eb",
+              alignItems: "center"
+            }}>
+              <View style={{
+                width: 48,
+                height: 48,
+                borderRadius: 24,
+                backgroundColor: "#fef2f2",
+                justifyContent: "center",
+                alignItems: "center",
+                marginBottom: 8
+              }}>
+                <Feather name="alert-triangle" size={24} color="#ef4444" />
+              </View>
+              <Text style={{
+                fontSize: 24,
+                fontWeight: "bold",
+                color: colorScheme === "dark" ? "#fff" : "#222",
+                marginBottom: 4
+              }}>
+                {sosRaisedCount}
+              </Text>
+              <Text style={{
+                fontSize: 12,
+                color: "#888",
+                textAlign: "center"
+              }}>
+                SOS Raised
+              </Text>
+            </View>
+
+            {/* Help Provided Card */}
+            <View style={{
+              flex: 1,
+              backgroundColor: colorScheme === "dark" ? "#23272e" : "#fff",
+              borderRadius: 12,
+              padding: 16,
+              borderWidth: 1,
+              borderColor: colorScheme === "dark" ? "#444" : "#e5e7eb",
+              alignItems: "center"
+            }}>
+              <View style={{
+                width: 48,
+                height: 48,
+                borderRadius: 24,
+                backgroundColor: "#f0fdf4",
+                justifyContent: "center",
+                alignItems: "center",
+                marginBottom: 8
+              }}>
+                <Feather name="heart" size={24} color="#10b981" />
+              </View>
+              <Text style={{
+                fontSize: 24,
+                fontWeight: "bold",
+                color: colorScheme === "dark" ? "#fff" : "#222",
+                marginBottom: 4
+              }}>
+                {profile?.helpProvided || 0}
+              </Text>
+              <Text style={{
+                fontSize: 12,
+                color: "#888",
+                textAlign: "center"
+              }}>
+                Help Provided
+              </Text>
+            </View>
+
+            {/* Trust Rating Card */}
+            <View style={{
+              flex: 1,
+              backgroundColor: colorScheme === "dark" ? "#23272e" : "#fff",
+              borderRadius: 12,
+              padding: 16,
+              borderWidth: 1,
+              borderColor: colorScheme === "dark" ? "#444" : "#e5e7eb",
+              alignItems: "center"
+            }}>
+              <View style={{
+                width: 48,
+                height: 48,
+                borderRadius: 24,
+                backgroundColor: "#eff6ff",
+                justifyContent: "center",
+                alignItems: "center",
+                marginBottom: 8
+              }}>
+                <Feather name="star" size={24} color="#3b82f6" />
+              </View>
+              <Text style={{
+                fontSize: 24,
+                fontWeight: "bold",
+                color: colorScheme === "dark" ? "#fff" : "#222",
+                marginBottom: 4
+              }}>
+                {profile?.trustRating ? profile.trustRating.toFixed(1) : "0.0"}
+              </Text>
+              <Text style={{
+                fontSize: 12,
+                color: "#888",
+                textAlign: "center"
+              }}>
+                Trust Rating
+              </Text>
+            </View>
           </View>
-          {notifications.map((n) => (
-            <TouchableOpacity
-              key={n.id}
-              style={[
-                styles.notificationRow,
-                n.critical && { borderLeftColor: "#ef4444", borderLeftWidth: 4 },
-              ]}
-              onPress={() => {
-                if (n.type === "Moderation") router.push("/Admin-Moderation");
-                if (n.type === "SOS") router.push("/Admin/sos");
-              }}
-              activeOpacity={0.8}
-            >
-              <MaterialCommunityIcons
-                name={
-                  n.type === "Moderation"
-                    ? "shield-alert"
-                    : n.type === "System"
-                    ? "server"
-                    : "alert-circle"
-                }
-                size={22}
-                color={n.critical ? "#ef4444" : "#2563eb"}
-                style={{ marginRight: 10 }}
-              />
-              <Text style={styles.notificationText}>{n.message}</Text>
+        </Animated.View>
+
+        {/* Community Impact Snapshot */}
+        <Animated.View entering={FadeIn.delay(600).duration(600)}>
+          <Text style={{
+            fontWeight: "600",
+            fontSize: 16,
+            marginBottom: 12,
+            color: colorScheme === "dark" ? "#fff" : "#222"
+          }}>
+            Community Impact
+          </Text>
+          <View style={{
+            backgroundColor: colorScheme === "dark" ? "#23272e" : "#fff",
+            borderRadius: 16,
+            padding: 16,
+            borderWidth: 1,
+            borderColor: colorScheme === "dark" ? "#444" : "#e5e7eb",
+          }}>
+            <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 8 }}>
+              <View style={{
+                width: 40,
+                height: 40,
+                borderRadius: 20,
+                backgroundColor: colorScheme === "dark" ? "#374151" : "#e0f2fe",
+                justifyContent: "center",
+                alignItems: "center",
+                marginRight: 12
+              }}>
+                <Feather name="users" size={20} color="#0ea5e9" />
+              </View>
+              <View>
+                <Text style={{
+                  fontWeight: "bold",
+                  color: colorScheme === "dark" ? "#fff" : "#222",
+                  fontSize: 16
+                }}>
+                  {sosRequests.length > 0 ?
+                    `${Math.floor(sosRequests.length / 3)} people helped nearby this week` :
+                    "Community data loading"}
+                </Text>
+                <Text style={{
+                  color: "#888",
+                  fontSize: 12
+                }}>
+                  {sosRequests.length > 0 ?
+                    "Your neighborhood is actively responding to emergencies" :
+                    "Check back soon for community updates"}
+                </Text>
+              </View>
+            </View>
+            <View style={{
+              height: 6,
+              backgroundColor: colorScheme === "dark" ? "#374151" : "#e5e7eb",
+              borderRadius: 3,
+              marginTop: 8,
+              overflow: "hidden"
+            }}>
+              <View style={{
+                width: `${sosRequests.length > 0 ? Math.min(100, sosRequests.length * 10) : 0}%`,
+                height: "100%",
+                backgroundColor: "#0ea5e9",
+                borderRadius: 3
+              }} />
+            </View>
+          </View>
+        </Animated.View>
+
+        {/* Quick Tips & News Feed */}
+        <Animated.View entering={FadeIn.delay(700).duration(600)}>
+          <View style={{
+            flexDirection: "row",
+            justifyContent: "space-between",
+            alignItems: "center",
+            marginBottom: 12
+          }}>
+            <Text style={{
+              fontWeight: "600",
+              fontSize: 16,
+              color: colorScheme === "dark" ? "#fff" : "#222"
+            }}>
+              Quick Tips & News
+            </Text>
+            <TouchableOpacity onPress={() => router.push("./news")}>
+              <Text style={{
+                color: "#3b82f6",
+                fontSize: 14,
+                fontWeight: "500"
+              }}>
+                See All
+              </Text>
             </TouchableOpacity>
-          ))}
-        </View>
+          </View>
+
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={{ gap: 12 }}
+          >
+            {newsFeed.length > 0 ? (
+              newsFeed.map((item) => (
+                <View
+                  key={item.id}
+                  style={{
+                    width: 200,
+                    backgroundColor: colorScheme === "dark" ? "#23272e" : "#fff",
+                    borderRadius: 12,
+                    padding: 16,
+                    borderWidth: 1,
+                    borderColor: colorScheme === "dark" ? "#444" : "#e5e7eb",
+                  }}
+                >
+                  <View style={{
+                    width: 32,
+                    height: 32,
+                    borderRadius: 16,
+                    backgroundColor: item.type === "tip" ? "#f0fdf4" :
+                      item.type === "news" ? "#eff6ff" : "#fef2f2",
+                    justifyContent: "center",
+                    alignItems: "center",
+                    marginBottom: 8
+                  }}>
+                    <Feather
+                      name={item.type === "tip" ? "info" :
+                        item.type === "news" ? "bell" : "book"}
+                      size={16}
+                      color={item.type === "tip" ? "#10b981" :
+                        item.type === "news" ? "#3b82f6" : "#ef4444"}
+                    />
+                  </View>
+                  <Text style={{
+                    fontWeight: "bold",
+                    color: colorScheme === "dark" ? "#fff" : "#222",
+                    marginBottom: 4
+                  }}>
+                    {item.title}
+                  </Text>
+                  <Text style={{
+                    color: "#888",
+                    fontSize: 12,
+                    marginBottom: 8
+                  }}>
+                    {item.summary}
+                  </Text>
+                  <Text style={{
+                    color: "#3b82f6",
+                    fontSize: 10
+                  }}>
+                    {item.date}
+                  </Text>
+                </View>
+              ))
+            ) : (
+              <View style={{
+                width: 200,
+                backgroundColor: colorScheme === "dark" ? "#23272e" : "#fff",
+                borderRadius: 12,
+                padding: 16,
+                borderWidth: 1,
+                borderColor: colorScheme === "dark" ? "#444" : "#e5e7eb",
+                justifyContent: "center",
+                alignItems: "center"
+              }}>
+                <Feather name="info" size={24} color="#888" />
+                <Text style={{
+                  color: "#888",
+                  marginTop: 8,
+                  textAlign: "center"
+                }}>
+                  No tips or news available
+                </Text>
+              </View>
+            )}
+          </ScrollView>
+        </Animated.View>
       </ScrollView>
     </SafeAreaView>
   );
 }
-
-const styles = StyleSheet.create({
-  topBar: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: 10,
-  },
-  title: {
-    fontSize: isTablet ? 32 : 22,
-    fontWeight: "bold",
-    color: "#2563eb",
-    flex: 1,
-  },
-  topIcons: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-  },
-  iconBtn: {
-    marginLeft: 12,
-    padding: 6,
-    borderRadius: 20,
-    backgroundColor: "#f1f5f9",
-  },
-  weatherWidget: {
-    flexDirection: "row",
-    alignItems: "center",
-    borderRadius: 18,
-    padding: isTablet ? 28 : 16,
-    marginBottom: isTablet ? 28 : 16,
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 2,
-  },
-  weatherRegion: {
-    fontWeight: "bold",
-    fontSize: isTablet ? 18 : 14,
-    color: "#2563eb",
-  },
-  weatherTemp: {
-    fontSize: isTablet ? 22 : 16,
-    fontWeight: "bold",
-    color: "#222",
-  },
-  weatherWind: {
-    fontSize: isTablet ? 14 : 12,
-    color: "#888",
-    marginBottom: 2,
-  },
-  riskTag: {
-    alignSelf: "flex-start",
-    paddingHorizontal: 10,
-    paddingVertical: 3,
-    borderRadius: 8,
-    marginTop: 4,
-  },
-  riskTagText: {
-    fontWeight: "bold",
-    fontSize: 13,
-    letterSpacing: 1,
-  },
-  weatherAlert: {
-    color: "#ef4444",
-    fontWeight: "bold",
-    fontSize: isTablet ? 14 : 11,
-    marginTop: 2,
-    maxWidth: 120,
-    textAlign: "right",
-  },
-  grid: {
-    flexDirection: "column",
-    width: "100%",
-  },
-  card: {
-    borderRadius: 16,
-    padding: isTablet ? 28 : 18,
-    marginBottom: 0,
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 2,
-    justifyContent: "space-between",
-  },
-  cardRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 8,
-  },
-  cardValue: {
-    fontSize: isTablet ? 32 : 22,
-    fontWeight: "bold",
-  },
-  cardLabel: {
-    fontSize: isTablet ? 18 : 14,
-    fontWeight: "600",
-    marginTop: 2,
-  },
-  tag: {
-    alignSelf: "flex-start",
-    paddingHorizontal: 10,
-    paddingVertical: 3,
-    borderRadius: 8,
-    marginLeft: 10,
-  },
-  tagText: {
-    fontWeight: "bold",
-    fontSize: isTablet ? 15 : 12,
-    letterSpacing: 1,
-  },
-  sectionCard: {
-    borderRadius: 16,
-    padding: isTablet ? 28 : 18,
-    marginTop: isTablet ? 28 : 16,
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 2,
-  },
-  sectionTitle: {
-    fontWeight: "bold",
-    fontSize: isTablet ? 18 : 15,
-    marginLeft: 8,
-    color: "#222",
-  },
-  responderTable: {
-    marginTop: 8,
-    borderRadius: 10,
-    overflow: "hidden",
-    borderWidth: 1,
-    borderColor: "#eee",
-  },
-  responderRowHeader: {
-    flexDirection: "row",
-    backgroundColor: "#f1f5f9",
-    paddingVertical: 6,
-  },
-  responderCellHeader: {
-    flex: 1,
-    fontWeight: "bold",
-    color: "#2563eb",
-    textAlign: "center",
-    fontSize: 14,
-  },
-  responderRow: {
-    flexDirection: "row",
-    backgroundColor: "#fff",
-    borderBottomWidth: 1,
-    borderBottomColor: "#f1f5f9",
-    paddingVertical: 6,
-  },
-  responderCell: {
-    flex: 1,
-    textAlign: "center",
-    fontSize: 14,
-  },
-  regionGridTablet: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 16,
-    marginTop: 8,
-  },
-  regionCard: {
-    borderRadius: 12,
-    borderWidth: 1,
-    padding: 14,
-    marginBottom: 10,
-    marginRight: 10,
-    minWidth: 120,
-    alignItems: "flex-start",
-  },
-  regionName: {
-    fontWeight: "bold",
-    fontSize: 15,
-    color: "#2563eb",
-  },
-  regionStat: {
-    fontSize: 13,
-    marginLeft: 4,
-    color: "#333",
-  },
-  actionRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 6,
-    gap: 8,
-  },
-  actionText: {
-    fontSize: 14,
-    color: "#222",
-    marginLeft: 6,
-    flex: 1,
-  },
-  actionTime: {
-    fontSize: 12,
-    color: "#888",
-    marginLeft: 8,
-  },
-  quickGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 10,
-    marginTop: 8,
-  },
-  quickGridTablet: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 18,
-    marginTop: 8,
-  },
-  quickBtn: {
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: 12,
-    paddingVertical: 16,
-    paddingHorizontal: 18,
-    marginRight: 10,
-    marginBottom: 10,
-    minWidth: 90,
-    maxWidth: 140,
-    elevation: 1,
-  },
-  quickLabel: {
-    fontWeight: "bold",
-    fontSize: 13,
-    marginTop: 6,
-  },
-  notificationRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#f8fafc",
-    borderRadius: 8,
-    padding: 10,
-    marginBottom: 8,
-    borderLeftWidth: 0,
-  },
-  notificationText: {
-    fontSize: 14,
-    color: "#222",
-    fontWeight: "500",
-  },
-});
