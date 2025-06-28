@@ -289,7 +289,7 @@ export default function HomeScreen() {
             </Text>
             <NotificationIcon
               unseenCount={notifCount}
-              onPress={() => router.push("/notifications")}
+              onPress={() => router.push("/Notifications")}
               theme={colorScheme}
             />
           </View>

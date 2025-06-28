@@ -8,7 +8,7 @@ import { ThemedText } from "@/components/ThemedText";
 import { ThemedView } from "@/components/ThemedView";
 import { IconSymbol } from "@/components/ui/IconSymbol";
 import MapFilterModal from "@/components/MapFilterModal";
-import SOSDetailModal from "@/components/SOSDetailModal";
+import SOSDetailModal from "@/components/Modals/SOSDetailModal";
 import { SafeZoneRoute, SafeZoneControls } from "@/components/SafeZoneNavigator";
 import { Colors } from "@/constants/Colors";
 import { getFirestore, collection, onSnapshot, Unsubscribe, Timestamp } from "firebase/firestore";

@@ -1,232 +1,258 @@
-import React from "react";
-import { Modal, StyleSheet, TouchableOpacity, View } from "react-native";
-import { ThemedText } from "@/components/ThemedText";
-import { ThemedView } from "@/components/ThemedView";
-import { IconSymbol } from "@/components/ui/IconSymbol";
-import { Colors } from "@/constants/Colors";
-import { useColorScheme } from "@/hooks/useColorScheme";
-import { SOSRequest } from "../Map/types";
+import { Colors } from "@/constants/Colors"
+import { useColorScheme } from "@/hooks/useColorScheme"
+import { Alert, Linking, Modal, ScrollView, StyleSheet, TouchableOpacity, View, ActivityIndicator } from "react-native"
+import { ThemedText } from "@/components/ThemedText"
+import { ThemedView } from "@/components/ThemedView"
+import { IconSymbol } from "@/components/ui/IconSymbol"
+import { getAuth } from "firebase/auth"
+import { db } from "@/lib/firebase"
+import { doc, updateDoc, getDoc, serverTimestamp, addDoc, collection } from "firebase/firestore"
+import React, { useState } from "react"
 
-interface SOSDetailModalProps {
-  isVisible: boolean;
-  sosAlert: SOSRequest;
-  onClose: () => void;
-  onAccept: () => void;
-  onOpenChat: () => void;
-  userRole?: "user" | "responder" | "admin";
+type SOSDetailModalProps = {
+  isVisible: boolean
+  sosAlert: any // Replace 'any' with a proper SOSAlert type
+  onClose: () => void
+  onAccept: (sosId: string) => void
 }
 
-export const SOSDetailModal: React.FC<SOSDetailModalProps> = ({
-  isVisible,
-  sosAlert,
-  onClose,
-  onAccept,
-  onOpenChat,
-  userRole = "user",
-}) => {
-  const colorScheme = useColorScheme() ?? "light";
-  const s = styles(colorScheme);
+export default function SOSDetailModal({ isVisible, sosAlert, onClose, onAccept }: SOSDetailModalProps) {
+  const colorScheme = useColorScheme() ?? "light"
+  const s = styles(colorScheme)
+  const [loading, setLoading] = useState(false)
 
-  const getUrgencyColor = () => {
-    switch (sosAlert.urgency) {
-      case "High":
-        return "#FF3B30";
-      case "Medium":
-        return "#FFD60A";
-      case "Low":
-        return "#10b981";
-      default:
-        return "#888";
+  if (!sosAlert) return null
+
+  // Get current user UID
+  const currentUser = getAuth().currentUser
+  const currentUid = currentUser?.uid
+
+  const handleCall = () => {
+    if (sosAlert.senderContact) {
+      Linking.openURL(`tel:${sosAlert.senderContact}`).catch(() => Alert.alert("Error", "Could not make the call."))
+    } else {
+      Alert.alert("No Contact", "Sender contact information is not available.")
     }
-  };
+  }
+
+  // Only show Accept & Respond if current user is NOT the sender
+  const showAcceptButton = sosAlert.userId && currentUid && sosAlert.userId !== currentUid
+
+  // Accept & Respond logic
+  const handleAcceptRespond = async () => {
+  if (loading) return;
+  setLoading(true);
+  try {
+    console.log("Attempting to respond to SOS:", sosAlert.id);
+
+    if (!currentUser) {
+      Alert.alert("Error", "You must be logged in to respond.");
+      setLoading(false);
+      return;
+    }
+
+    // Check if SOS document exists
+    const sosDocRef = doc(db, "sos_requests", sosAlert.id);
+    console.log("Getting SOS doc ref:", sosDocRef.path);
+    const sosDocSnap = await getDoc(sosDocRef);
+    if (!sosDocSnap.exists()) {
+      Alert.alert("Error", "SOS request not found.");
+      setLoading(false);
+      return;
+    }
+    console.log("SOS doc exists, proceeding to update...");
+
+    // Fetch responder profile
+    const userDoc = await getDoc(doc(db, "users", currentUser.uid));
+    const userData = userDoc.exists() ? userDoc.data() : {};
+    const responderName = userData.fullName || userData.name || currentUser.displayName || currentUser.email || "Unknown";
+    const responderRole = userData.role || "user";
+
+    // Update SOS with responder info
+    await updateDoc(sosDocRef, {
+      status: "responded",
+      responderId: currentUser.uid,
+      responderName,
+      responderRole,
+      respondedAt: serverTimestamp(),
+    });
+    console.log("SOS document updated in Firestore!");
+
+    // Add notification (optional)
+    await addDoc(collection(db, "notifications"), {
+      toUserId: sosAlert.userId,
+      sosId: sosAlert.id,
+      type: "sos_responded",
+      message: `Your SOS has been accepted and responded, help is on the way by ${responderName} (${responderRole === "employee" ? "Helper" : responderRole === "responder" ? "Rescuer" : "User"}).`,
+      responderId: currentUser.uid,
+      responderName,
+      responderRole,
+      createdAt: serverTimestamp(),
+      read: false,
+    });
+    console.log("Notification added!");
+
+    Alert.alert("Accepted", "You have accepted and responded to this SOS.");
+    onAccept(sosAlert.id);
+    onClose();
+  } catch (e: any) {
+    console.error("Error in handleAcceptRespond:", e);
+    Alert.alert("Error", "Failed to accept and respond. " + (e?.message || ""));
+  } finally {
+    setLoading(false);
+  }
+};
 
   return (
-    <Modal
-      visible={isVisible}
-      animationType="slide"
-      transparent
-      onRequestClose={onClose}
-    >
-      <View style={s.modalContainer}>
+    <Modal animationType="slide" transparent={true} visible={isVisible} onRequestClose={onClose}>
+      <View style={s.modalOverlay}>
         <ThemedView style={s.modalContent}>
-          <View style={s.header}>
-            <ThemedText style={s.title}>Emergency Alert</ThemedText>
+          <View style={s.modalHeader}>
+            <ThemedText style={s.modalTitleText}>SOS Alert Details</ThemedText>
             <TouchableOpacity onPress={onClose}>
               <IconSymbol name="xmark" size={24} color={Colors[colorScheme].text} />
             </TouchableOpacity>
           </View>
-
-          <View style={s.section}>
-            <ThemedText style={s.label}>Emergency Type:</ThemedText>
-            <ThemedText style={s.value}>{sosAlert.emergencyType}</ThemedText>
-          </View>
-
-          <View style={s.section}>
-            <ThemedText style={s.label}>Urgency:</ThemedText>
-            <View style={[s.urgencyBadge, { backgroundColor: getUrgencyColor() }]}>
-              <ThemedText style={s.urgencyText}>{sosAlert.urgency}</ThemedText>
+          <ScrollView>
+            <View style={s.detailItem}>
+              <IconSymbol name="exclamationmark.triangle.fill" size={20} color={Colors[colorScheme].icon} />
+              <ThemedText style={s.detailLabel}>Type:</ThemedText>
+              <ThemedText style={s.detailValue}>{sosAlert.emergencyType}</ThemedText>
             </View>
-          </View>
-
-          <View style={s.section}>
-            <ThemedText style={s.label}>Description:</ThemedText>
-            <ThemedText style={s.value}>{sosAlert.description}</ThemedText>
-          </View>
-
-          {sosAlert.senderName && (
-            <View style={s.section}>
-              <ThemedText style={s.label}>Sender:</ThemedText>
-              <ThemedText style={s.value}>{sosAlert.senderName}</ThemedText>
+            <View style={s.detailItem}>
+              <IconSymbol name="text.bubble.fill" size={20} color={Colors[colorScheme].icon} />
+              <ThemedText style={s.detailLabel}>Description:</ThemedText>
+              <ThemedText style={s.detailValue}>{sosAlert.description || "No description provided."}</ThemedText>
             </View>
-          )}
-
-          {sosAlert.senderContact && (
-            <View style={s.section}>
-              <ThemedText style={s.label}>Contact:</ThemedText>
-              <ThemedText style={s.value}>{sosAlert.senderContact}</ThemedText>
+            {sosAlert.senderName && (
+              <View style={s.detailItem}>
+                <IconSymbol name="person.fill" size={20} color={Colors[colorScheme].icon} />
+                <ThemedText style={s.detailLabel}>Sender:</ThemedText>
+                <ThemedText style={s.detailValue}>{sosAlert.senderName}</ThemedText>
+              </View>
+            )}
+            <View style={s.detailItem}>
+              <IconSymbol name="clock.fill" size={20} color={Colors[colorScheme].icon} />
+              <ThemedText style={s.detailLabel}>Time:</ThemedText>
+              <ThemedText style={s.detailValue}>{sosAlert.timestamp ? new Date(sosAlert.timestamp).toLocaleTimeString() : ""}</ThemedText>
             </View>
-          )}
+            <View style={s.detailItem}>
+              <IconSymbol name="bolt.horizontal.circle.fill" size={20} color={Colors[colorScheme].icon} />
+              <ThemedText style={s.detailLabel}>Urgency:</ThemedText>
+              <ThemedText
+                style={[
+                  s.detailValue,
+                  { color: sosAlert.urgency === "High" ? "red" : sosAlert.urgency === "Medium" ? "orange" : "green" },
+                ]}
+              >
+                {sosAlert.urgency}
+              </ThemedText>
+            </View>
+            {sosAlert.responderName && (
+              <View style={s.detailItem}>
+                <IconSymbol name="person.fill" size={20} color={Colors[colorScheme].icon} />
+                <ThemedText style={s.detailLabel}>Responder:</ThemedText>
+                <ThemedText style={s.detailValue}>
+                  {sosAlert.responderName} ({sosAlert.responderRole === "employee" ? "Helper" : sosAlert.responderRole === "responder" ? "Rescuer" : "User"})
+                </ThemedText>
+              </View>
+            )}
+          </ScrollView>
 
-          <View style={s.section}>
-            <ThemedText style={s.label}>Time Reported:</ThemedText>
-            <ThemedText style={s.value}>
-              {sosAlert.createdAt?.toDate
-                ? sosAlert.createdAt.toDate().toLocaleString()
-                : "Unknown"}
-            </ThemedText>
-          </View>
-
-          {(userRole === "responder" || userRole === "admin") && (
-            <View style={s.buttonRow}>
-              <TouchableOpacity style={s.cancelButton} onPress={onClose}>
-                <ThemedText style={s.cancelButtonText}>Close</ThemedText>
+          <View style={s.actionsContainer}>
+            {sosAlert.senderContact && (
+              <TouchableOpacity style={[s.actionButton, s.callButton]} onPress={handleCall}>
+                <IconSymbol name="phone.fill" size={18} color={Colors.dark.text} />
+                <ThemedText style={s.actionButtonText}>Call Sender</ThemedText>
               </TouchableOpacity>
-
-              {sosAlert.status === "responded" && (
-                <TouchableOpacity style={s.chatButton} onPress={onOpenChat}>
-                  <IconSymbol name="bubble.left.fill" size={20} color="#fff" />
-                  <ThemedText style={s.chatButtonText}>Chat</ThemedText>
-                </TouchableOpacity>
-              )}
-
-              {sosAlert.status === "active" && (
-                <TouchableOpacity style={s.acceptButton} onPress={onAccept}>
-                  <ThemedText style={s.acceptButtonText}>Respond</ThemedText>
-                </TouchableOpacity>
-              )}
-            </View>
-          )}
-
-          {userRole === "user" && (
-            <TouchableOpacity style={s.closeButton} onPress={onClose}>
-              <ThemedText style={s.closeButtonText}>Close</ThemedText>
-            </TouchableOpacity>
-          )}
+            )}
+            {showAcceptButton && sosAlert.status !== "responded" && (
+              <TouchableOpacity
+                style={[s.actionButton, s.acceptButton]}
+                onPress={handleAcceptRespond}
+                disabled={loading}
+              >
+                {loading ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <>
+                    <IconSymbol name="hand.raised.fill" size={18} color={Colors.dark.text} />
+                    <ThemedText style={s.actionButtonText}>Accept & Respond</ThemedText>
+                  </>
+                )}
+              </TouchableOpacity>
+            )}
+          </View>
         </ThemedView>
       </View>
     </Modal>
-  );
-};
+  )
+}
 
 const styles = (colorScheme: "light" | "dark") =>
   StyleSheet.create({
-    modalContainer: {
+    modalOverlay: {
       flex: 1,
-      justifyContent: "flex-end",
       backgroundColor: "rgba(0,0,0,0.5)",
+      justifyContent: "center",
+      alignItems: "center",
     },
     modalContent: {
-      borderTopLeftRadius: 20,
-      borderTopRightRadius: 20,
+      width: "90%",
+      borderRadius: 20,
       padding: 24,
-      paddingBottom: 32,
       backgroundColor: Colors[colorScheme].background,
+      maxHeight: "85%",
     },
-    header: {
+    modalHeader: {
       flexDirection: "row",
       justifyContent: "space-between",
       alignItems: "center",
       marginBottom: 20,
     },
-    title: {
+    modalTitleText: {
       fontSize: 20,
       fontWeight: "bold",
     },
-    section: {
-      marginBottom: 16,
+    detailItem: {
+      flexDirection: "row",
+      alignItems: "center",
+      marginBottom: 12,
+      gap: 8,
     },
-    label: {
-      fontSize: 14,
-      color: "#666",
-      marginBottom: 4,
-    },
-    value: {
-      fontSize: 16,
-    },
-    urgencyBadge: {
-      paddingVertical: 4,
-      paddingHorizontal: 12,
-      borderRadius: 12,
-      alignSelf: "flex-start",
-    },
-    urgencyText: {
-      color: "#fff",
+    detailLabel: {
       fontWeight: "bold",
+      marginRight: 4,
+      color: Colors[colorScheme].text,
     },
-    buttonRow: {
+    detailValue: {
+      color: Colors[colorScheme].text,
+      flexShrink: 1,
+    },
+    actionsContainer: {
       flexDirection: "row",
       justifyContent: "space-between",
       marginTop: 24,
-      flexWrap: "wrap",
-      gap: 8,
+      gap: 12,
     },
-    cancelButton: {
-      flex: 1,
-      padding: 16,
-      backgroundColor: Colors[colorScheme].inputBackground,
-      borderRadius: 12,
-      marginRight: 8,
-      alignItems: "center",
-    },
-    cancelButtonText: {
-      fontWeight: "bold",
-      color: Colors[colorScheme].text,
-    },
-    chatButton: {
+    actionButton: {
       flex: 1,
       flexDirection: "row",
       alignItems: "center",
       justifyContent: "center",
-      padding: 16,
-      backgroundColor: "#007AFF",
+      padding: 14,
       borderRadius: 12,
-      marginRight: 8,
+      marginHorizontal: 4,
     },
-    chatButtonText: {
+    callButton: {
+      backgroundColor: "#f1c40f",
+    },
+    acceptButton: {
+      backgroundColor: "#FF3B30",
+    },
+    actionButtonText: {
       color: "#fff",
       fontWeight: "bold",
       marginLeft: 8,
-    },
-    acceptButton: {
-      flex: 1,
-      padding: 16,
-      backgroundColor: "#FF3B30",
-      borderRadius: 12,
-      alignItems: "center",
-    },
-    acceptButtonText: {
-      color: "#fff",
-      fontWeight: "bold",
-    },
-    closeButton: {
-      padding: 16,
-      backgroundColor: Colors[colorScheme].inputBackground,
-      borderRadius: 12,
-      marginTop: 24,
-      alignItems: "center",
-    },
-    closeButtonText: {
-      fontWeight: "bold",
-      color: Colors[colorScheme].text,
     },
   });
