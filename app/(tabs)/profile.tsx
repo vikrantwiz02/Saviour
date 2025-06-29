@@ -500,6 +500,7 @@ export default function ProfileScreen() {
         showsVerticalScrollIndicator={false}
       >
         <ThemedView style={s.container}>
+          <ThemedText style={s.headerTitle}>Profile</ThemedText>
           {/* Current City */}
           <View style={s.cityContainer}>
             <Ionicons 
@@ -818,6 +819,13 @@ const styles = (theme: "light" | "dark") =>
       flex: 1,
       padding: 20,
       paddingBottom: 30,
+    },
+    headerTitle: {
+      fontSize: 24,
+      fontWeight: 'bold',
+      color: Colors[theme].tint,
+      marginBottom: 18,
+      textAlign: 'center',
     },
     cityContainer: {
       flexDirection: 'row',

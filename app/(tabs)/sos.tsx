@@ -35,6 +35,8 @@ type EmergencyType =
   | "Public Disturbance"
   | "Other";
 
+type AlertLevel = "Low" | "Medium" | "High";
+
 const emergencyTypes: EmergencyType[] = [
   "Medical Emergency",
   "Fire Outbreak",
@@ -46,6 +48,8 @@ const emergencyTypes: EmergencyType[] = [
   "Public Disturbance",
   "Other",
 ];
+
+const alertLevels: AlertLevel[] = ["Low", "Medium", "High"];
 
 const getIconForType = (type: EmergencyType) => {
   switch (type) {
@@ -70,7 +74,7 @@ const getIconForType = (type: EmergencyType) => {
   }
 };
 
-// EmergencyTypePicker component (merged in file for simplicity)
+// EmergencyTypePicker component
 const EmergencyTypePicker: React.FC<{
   selectedType: EmergencyType | null;
   onSelect: (type: EmergencyType) => void;
@@ -112,12 +116,52 @@ const EmergencyTypePicker: React.FC<{
   );
 };
 
+// AlertLevelPicker component
+const AlertLevelPicker: React.FC<{
+  selectedLevel: AlertLevel | null;
+  onSelect: (level: AlertLevel) => void;
+}> = ({ selectedLevel, onSelect }) => {
+  const colorScheme = useColorScheme() ?? "light";
+  const s = alertLevelPickerStyles(colorScheme);
+
+  return (
+    <View style={s.container}>
+      <ThemedText style={s.label}>Alert Level:</ThemedText>
+      <View style={s.optionsRow}>
+        {alertLevels.map((level) => (
+          <TouchableOpacity
+            key={level}
+            style={[
+              s.optionButton,
+              selectedLevel === level && s.selectedOption,
+              selectedLevel === level && level === "Low" && s.lowOption,
+              selectedLevel === level && level === "Medium" && s.mediumOption,
+              selectedLevel === level && level === "High" && s.highOption,
+            ]}
+            onPress={() => onSelect(level)}
+          >
+            <ThemedText
+              style={[
+                s.optionText,
+                selectedLevel === level && s.selectedOptionText,
+              ]}
+            >
+              {level}
+            </ThemedText>
+          </TouchableOpacity>
+        ))}
+      </View>
+    </View>
+  );
+};
+
 function normalizeCity(city: string | null): string | null {
   return city ? city.trim().toLowerCase() : null;
 }
 
 export default function SOSScreen() {
   const [selectedEmergencyType, setSelectedEmergencyType] = useState<EmergencyType | null>(null);
+  const [selectedAlertLevel, setSelectedAlertLevel] = useState<AlertLevel>("High");
   const [description, setDescription] = useState("");
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [imageUploading, setImageUploading] = useState(false);
@@ -264,8 +308,8 @@ export default function SOSScreen() {
         longitude: userLocation.longitude,
         city: normalizeCity(city),
         emergencyType: selectedEmergencyType,
+        alertLevel: selectedAlertLevel,
         description,
-        urgency: "High",
         createdAt: serverTimestamp(),
         isPublic: true,
         senderName: user.displayName || user.email || "Unknown",
@@ -285,6 +329,7 @@ export default function SOSScreen() {
     setSosSent(false);
     setCanCancel(false);
     setSelectedEmergencyType(null);
+    setSelectedAlertLevel("High");
     setDescription("");
     setImageUri(null);
     setImageDownloadUrl(null);
@@ -325,7 +370,13 @@ export default function SOSScreen() {
               onSelect={setSelectedEmergencyType}
             />
 
-            <ThemedText style={s.sectionTitle}>2. Optional Description</ThemedText>
+            {/* Alert Level Picker */}
+            <AlertLevelPicker
+              selectedLevel={selectedAlertLevel}
+              onSelect={setSelectedAlertLevel}
+            />
+
+            <ThemedText style={s.sectionTitle}>3. Optional Description</ThemedText>
             <TextInput
               style={s.descriptionInput}
               placeholder="e.g., Person unconscious, heavy smoke..."
@@ -336,7 +387,7 @@ export default function SOSScreen() {
               numberOfLines={4}
             />
 
-            <ThemedText style={s.sectionTitle}>3. Add Image (Optional)</ThemedText>
+            <ThemedText style={s.sectionTitle}>4. Add Image (Optional)</ThemedText>
             <TouchableOpacity style={s.imagePickerButton} onPress={handlePickImage}>
               <IconSymbol name="camera.fill" size={24} color={Colors[colorScheme].tint} />
               <ThemedText style={s.imagePickerButtonText}>{imageUri ? "Change Image" : "Select Image"}</ThemedText>
@@ -351,7 +402,7 @@ export default function SOSScreen() {
               </View>
             )}
 
-            <ThemedText style={s.sectionTitle}>4. Your Live Location</ThemedText>
+            <ThemedText style={s.sectionTitle}>5. Your Live Location</ThemedText>
             <View style={s.locationContainer}>
               <IconSymbol name="location.fill" size={20} color={Colors[colorScheme].icon} />
               <ThemedText style={s.locationText}>
@@ -406,8 +457,8 @@ const emergencyTypePickerStyles = (colorScheme: "light" | "dark") =>
       borderColor: Colors[colorScheme].border,
     },
     selectedOption: {
-      backgroundColor: "#007AFF",
-      borderColor: "#007AFF",
+      backgroundColor: "#7C3AED", // Purple color
+      borderColor: "#7C3AED",
     },
     optionText: {
       marginTop: 6,
@@ -417,6 +468,57 @@ const emergencyTypePickerStyles = (colorScheme: "light" | "dark") =>
     },
     selectedOptionText: {
       color: "#fff",
+    },
+  });
+
+// Styles for AlertLevelPicker
+const alertLevelPickerStyles = (colorScheme: "light" | "dark") =>
+  StyleSheet.create({
+    container: {
+      marginBottom: 20,
+    },
+    label: {
+      fontSize: 16,
+      marginBottom: 8,
+      color: Colors[colorScheme].textMuted,
+    },
+    optionsRow: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+    },
+    optionButton: {
+      flex: 1,
+      padding: 12,
+      marginHorizontal: 4,
+      borderRadius: 8,
+      alignItems: "center",
+      borderWidth: 1,
+      borderColor: Colors[colorScheme].border,
+      backgroundColor: Colors[colorScheme].inputBackground,
+    },
+    selectedOption: {
+      borderWidth: 2,
+    },
+    lowOption: {
+      backgroundColor: "#10B981", // Green
+      borderColor: "#10B981",
+    },
+    mediumOption: {
+      backgroundColor: "#F59E0B", // Orange
+      borderColor: "#F59E0B",
+    },
+    highOption: {
+      backgroundColor: "#EF4444", // Red
+      borderColor: "#EF4444",
+    },
+    optionText: {
+      fontSize: 14,
+      fontWeight: "500",
+      color: Colors[colorScheme].text,
+    },
+    selectedOptionText: {
+      color: "#fff",
+      fontWeight: "bold",
     },
   });
 
@@ -436,7 +538,7 @@ const styles = (colorScheme: "light" | "dark" = "light") =>
       fontWeight: "bold",
       textAlign: "center",
       marginBottom: 25,
-      color: Colors[colorScheme].text,
+      color: "#7C3AED", // Purple color
     },
     sectionTitle: {
       fontSize: 18,
@@ -469,7 +571,7 @@ const styles = (colorScheme: "light" | "dark" = "light") =>
     imagePickerButtonText: {
       marginLeft: 10,
       fontSize: 16,
-      color: Colors[colorScheme].tint,
+      color: "#7C3AED", // Purple color
       fontWeight: "500",
     },
     imagePreviewContainer: {
@@ -508,11 +610,16 @@ const styles = (colorScheme: "light" | "dark" = "light") =>
       flex: 1,
     },
     sendButton: {
-      backgroundColor: "#FF3B30",
+      backgroundColor: "#7C3AED", // Purple color
       paddingVertical: 18,
       borderRadius: 8,
       alignItems: "center",
       marginTop: 30,
+      shadowColor: "#7C3AED",
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.3,
+      shadowRadius: 8,
+      elevation: 6,
     },
     sendButtonText: {
       color: "#FFFFFF",
@@ -532,7 +639,7 @@ const styles = (colorScheme: "light" | "dark" = "light") =>
       marginTop: 20,
       marginBottom: 10,
       textAlign: "center",
-      color: Colors[colorScheme].text,
+      color: "#7C3AED", // Purple color
     },
     confirmationMessage: {
       fontSize: 16,
@@ -553,7 +660,7 @@ const styles = (colorScheme: "light" | "dark" = "light") =>
       borderColor: Colors[colorScheme].border,
     },
     cancelButtonText: {
-      color: Colors[colorScheme].tint,
+      color: "#7C3AED", // Purple color
       fontSize: 16,
       fontWeight: "600",
     },
@@ -563,14 +670,14 @@ const styles = (colorScheme: "light" | "dark" = "light") =>
       marginTop: 10,
     },
     actionButton: {
-      backgroundColor: Colors[colorScheme].tint,
+      backgroundColor: "#7C3AED", // Purple color
       paddingVertical: 15,
       paddingHorizontal: 40,
       borderRadius: 8,
       marginTop: 20,
     },
     actionButtonText: {
-      color: Colors.dark.text,
+      color: "#FFFFFF",
       fontSize: 16,
       fontWeight: "bold",
     },

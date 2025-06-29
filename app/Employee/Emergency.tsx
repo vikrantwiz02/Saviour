@@ -1,135 +1,248 @@
 import { Colors } from "@/constants/Colors";
 import { useColorScheme } from "@/hooks/useColorScheme";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
-    Dimensions,
-    FlatList,
-    Modal,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View
+  ActivityIndicator,
+  Dimensions,
+  FlatList,
+  Modal,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from "react-native";
-import MapView, { Marker, Polyline } from "react-native-maps";
+import MapView, { Marker } from "react-native-maps";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { getFirestore, collection, onSnapshot, Timestamp, doc, updateDoc, getDoc, addDoc } from "firebase/firestore";
+import { getAuth } from "firebase/auth";
 
 const { width } = Dimensions.get("window");
 const isTablet = width >= 768;
 
-// Mock emergency feed data
-const EMERGENCIES = [
-  {
-    id: "sos-1001",
-    type: "Medical",
-    level: "Critical",
-    user: "Alice Johnson",
-    status: "Open",
-    assigned: false,
-    location: { latitude: 28.6139, longitude: 77.209 },
-    address: "Sector 12, North",
-    distance: 1.2,
-    raised: "2025-06-20T09:30:00Z",
-    timeAgo: "5 min ago",
-  },
-  {
-    id: "sos-1002",
-    type: "Fire",
-    level: "High",
-    user: "Carol Lee",
-    status: "Assigned",
-    assigned: true,
-    location: { latitude: 28.6145, longitude: 77.215 },
-    address: "Market Road, North",
-    distance: 2.5,
-    raised: "2025-06-20T08:55:00Z",
-    timeAgo: "40 min ago",
-  },
-  {
-    id: "sos-1003",
-    type: "Police",
-    level: "Moderate",
-    user: "David Kumar",
-    status: "Open",
-    assigned: false,
-    location: { latitude: 28.6100, longitude: 77.210 },
-    address: "Main Square, North",
-    distance: 0.8,
-    raised: "2025-06-20T09:50:00Z",
-    timeAgo: "2 min ago",
-  },
+const EMERGENCY_TYPES = [
+  "All",
+  "Medical Emergency",
+  "Fire Outbreak",
+  "Armed Robbery",
+  "Car Accident",
+  "Domestic Violence",
+  "Natural Disaster",
+  "Missing Person",
+  "Public Disturbance",
+  "Other",
 ];
 
-const LEVEL_COLORS: Record<string, string> = {
-  Critical: "#ef4444",
-  High: "#fbbf24",
-  Moderate: "#3b82f6",
+const TYPE_ICONS: Record<string, any> = {
+  "Medical Emergency": "medical-bag",
+  "Fire Outbreak": "fire",
+  "Armed Robbery": "pistol",
+  "Car Accident": "car-crash",
+  "Domestic Violence": "account-group",
+  "Natural Disaster": "weather-hurricane",
+  "Missing Person": "account-search",
+  "Public Disturbance": "account-alert",
+  "Other": "alert-circle",
 };
 
-const EMERGENCY_TYPES = ["All", "Medical", "Fire", "Police"];
-const URGENCY_LEVELS = ["All", "Critical", "High", "Moderate"];
-const DISTANCE_FILTERS = ["All", "< 1km", "< 2km", "< 5km"];
+const LEVEL_COLORS: Record<string, string> = {
+  High: "#ef4444",
+  Medium: "#fbbf24",
+  Low: "#3b82f6",
+};
+
+function timeAgo(date: Date) {
+  const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
+type SOSRequest = {
+  id: string;
+  userId: string;
+  latitude: number;
+  longitude: number;
+  emergencyType: string;
+  description: string;
+  urgency: "High" | "Medium" | "Low";
+  createdAt: Timestamp;
+  isPublic: boolean;
+  senderName?: string;
+  senderContact?: string;
+  status?: string;
+  responderId?: string;
+  responderName?: string;
+  responderRole?: string;
+  address?: string;
+};
 
 export default function EmergencyFeedScreen() {
   const colorScheme = useColorScheme() ?? "light";
-  const [view, setView] = useState<"list" | "map" | "dual">(isTablet ? "dual" : "list");
-  const [selectedEmergency, setSelectedEmergency] = useState<any | null>(null);
+  const [view, setView] = useState<"list" | "map">(isTablet ? "list" : "list");
+  const [userLocation, setUserLocation] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [sosRequests, setSosRequests] = useState<SOSRequest[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedSOS, setSelectedSOS] = useState<SOSRequest | null>(null);
   const [typeFilter, setTypeFilter] = useState("All");
-  const [urgencyFilter, setUrgencyFilter] = useState("All");
-  const [distanceFilter, setDistanceFilter] = useState("All");
+  const mapRef = useRef<MapView>(null);
 
-  // Filtering logic
-  const filteredEmergencies = EMERGENCIES.filter((e) => {
-    if (typeFilter !== "All" && e.type !== typeFilter) return false;
-    if (urgencyFilter !== "All" && e.level !== urgencyFilter) return false;
-    if (distanceFilter === "< 1km" && e.distance >= 1) return false;
-    if (distanceFilter === "< 2km" && e.distance >= 2) return false;
-    if (distanceFilter === "< 5km" && e.distance >= 5) return false;
-    return true;
-  });
+  // --- Fetch User Location ---
+  useEffect(() => {
+    (async () => {
+      let { status } = await import("expo-location").then((m) => m.requestForegroundPermissionsAsync());
+      if (status !== "granted") {
+        setLoading(false);
+        return;
+      }
+      let location = await import("expo-location").then((m) => m.getCurrentPositionAsync({}));
+      setUserLocation({
+        latitude: location.coords.latitude,
+        longitude: location.coords.longitude,
+      });
+      setLoading(false);
+    })();
+  }, []);
 
-  // Accept/Reject/Arrived actions (frontend only)
-  const handleAction = (emergency: any, action: string) => {
-    setSelectedEmergency(null);
-    // UI feedback only
-    alert(`"${action}" for ${emergency.id} (${emergency.type})`);
+  // --- Firestore Listener for SOS Requests ---
+  useEffect(() => {
+    const db = getFirestore();
+    const q = collection(db, "sos_requests");
+    const unsub = onSnapshot(q, (snapshot) => {
+      const allSOS: SOSRequest[] = [];
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        allSOS.push({
+          id: docSnap.id,
+          userId: data.userId,
+          latitude: data.latitude,
+          longitude: data.longitude,
+          emergencyType: data.emergencyType,
+          description: data.description,
+          urgency: data.urgency,
+          createdAt: data.createdAt,
+          isPublic: data.isPublic,
+          senderName: data.senderName,
+          senderContact: data.senderContact,
+          status: data.status,
+          responderId: data.responderId,
+          responderName: data.responderName,
+          responderRole: data.responderRole,
+          address: data.address,
+        });
+      });
+      setSosRequests(allSOS);
+    });
+    return () => unsub();
+  }, []);
+
+  // --- Filtering ---
+  const filteredSOS = sosRequests.filter((sos) =>
+    typeFilter === "All" ? true : sos.emergencyType === typeFilter
+  );
+
+  // --- Map Region ---
+  const initialRegion =
+    userLocation
+      ? {
+          latitude: userLocation.latitude,
+          longitude: userLocation.longitude,
+          latitudeDelta: 0.04,
+          longitudeDelta: 0.04,
+        }
+      : {
+          latitude: 28.6139,
+          longitude: 77.209,
+          latitudeDelta: 0.04,
+          longitudeDelta: 0.04,
+        };
+
+  // --- Marker Press ---
+  const handleMarkerPress = (sos: SOSRequest) => {
+    setSelectedSOS(sos);
   };
 
-  // Map region (centered on first emergency or fallback)
-  const initialRegion = {
-    latitude: filteredEmergencies[0]?.location.latitude ?? 28.6139,
-    longitude: filteredEmergencies[0]?.location.longitude ?? 77.209,
-    latitudeDelta: 0.02,
-    longitudeDelta: 0.02,
+  // --- Respond Action ---
+  const handleRespond = async (sos: SOSRequest) => {
+    const auth = getAuth();
+    const currentUser = auth.currentUser;
+    if (!currentUser) {
+      alert("You must be logged in to respond.");
+      return;
+    }
+    try {
+      const db = getFirestore();
+      // Fetch employee profile
+      const userDoc = await getDoc(doc(db, "users", currentUser.uid));
+      const userData = userDoc.exists() ? userDoc.data() : {};
+      const responderName =
+        userData.fullName ||
+        userData.name ||
+        currentUser.displayName ||
+        currentUser.email ||
+        "Unknown";
+      const responderRole = userData.role || "employee";
+
+      // Update SOS with responder info
+      await updateDoc(doc(db, "sos_requests", sos.id), {
+        status: "responded",
+        responderId: currentUser.uid,
+        responderName,
+        responderRole,
+        respondedAt: Timestamp.now(),
+      });
+
+      // Add notification (optional)
+      await addDoc(collection(db, "notifications"), {
+        toUserId: sos.userId,
+        sosId: sos.id,
+        type: "sos_responded",
+        message: `Your SOS has been accepted and responded, help is on the way by ${responderName} (${responderRole}).`,
+        responderId: currentUser.uid,
+        responderName,
+        responderRole,
+        createdAt: Timestamp.now(),
+        read: false,
+      });
+
+      alert("You have accepted and responded to this SOS.");
+      setSelectedSOS(null);
+    } catch (e: any) {
+      alert("Failed to accept and respond. " + (e?.message || ""));
+    }
   };
 
-  // Dual-pane for tablets
-  const dualPane = isTablet && view === "dual";
-
+  // --- UI ---
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: Colors[colorScheme].background }}>
+      {/* Header */}
       <View style={styles.headerRow}>
         <Text style={styles.headerTitle}>Emergency Feed</Text>
         <View style={styles.headerTabs}>
           <TouchableOpacity
-            style={[styles.tabBtn, (view === "list" || dualPane) && styles.tabBtnActive]}
-            onPress={() => setView(isTablet ? "dual" : "list")}
+            style={[styles.tabBtn, view === "list" && styles.tabBtnActive]}
+            onPress={() => setView("list")}
           >
-            <Ionicons name="list" size={20} color={view === "list" || dualPane ? "#2563eb" : "#888"} />
-            <Text style={[styles.tabBtnText, (view === "list" || dualPane) && styles.tabBtnTextActive]}>List</Text>
+            <Ionicons name="list" size={20} color={view === "list" ? "#2563eb" : "#888"} />
+            <Text style={[styles.tabBtnText, view === "list" && styles.tabBtnTextActive]}>List</Text>
           </TouchableOpacity>
           <TouchableOpacity
-            style={[styles.tabBtn, view === "map" && !dualPane && styles.tabBtnActive]}
+            style={[styles.tabBtn, view === "map" && styles.tabBtnActive]}
             onPress={() => setView("map")}
           >
-            <Ionicons name="map" size={20} color={view === "map" && !dualPane ? "#2563eb" : "#888"} />
-            <Text style={[styles.tabBtnText, view === "map" && !dualPane && styles.tabBtnTextActive]}>Map</Text>
+            <Ionicons name="map" size={20} color={view === "map" ? "#2563eb" : "#888"} />
+            <Text style={[styles.tabBtnText, view === "map" && styles.tabBtnTextActive]}>Map</Text>
           </TouchableOpacity>
         </View>
       </View>
 
-      {/* Filters */}
+      {/* Filters with vertical text */}
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterRow}>
         {EMERGENCY_TYPES.map((type) => (
           <TouchableOpacity
@@ -137,226 +250,177 @@ export default function EmergencyFeedScreen() {
             style={[styles.filterChip, typeFilter === type && styles.filterChipActive]}
             onPress={() => setTypeFilter(type)}
           >
-            <Text style={{ color: typeFilter === type ? "#fff" : "#222" }}>{type}</Text>
-          </TouchableOpacity>
-        ))}
-        {URGENCY_LEVELS.map((level) => (
-          <TouchableOpacity
-            key={level}
-            style={[styles.filterChip, urgencyFilter === level && styles.filterChipActive]}
-            onPress={() => setUrgencyFilter(level)}
-          >
-            <Text style={{ color: urgencyFilter === level ? "#fff" : "#222" }}>{level}</Text>
-          </TouchableOpacity>
-        ))}
-        {DISTANCE_FILTERS.map((dist) => (
-          <TouchableOpacity
-            key={dist}
-            style={[styles.filterChip, distanceFilter === dist && styles.filterChipActive]}
-            onPress={() => setDistanceFilter(dist)}
-          >
-            <Text style={{ color: distanceFilter === dist ? "#fff" : "#222" }}>{dist}</Text>
+            <Text
+              style={[
+                styles.verticalRotatedText,
+                { color: typeFilter === type ? "#fff" : "#222" },
+              ]}
+              numberOfLines={1}
+            >
+              {type}
+            </Text>
           </TouchableOpacity>
         ))}
       </ScrollView>
 
-      <View style={{ flex: 1, flexDirection: dualPane ? "row" : "column" }}>
-        {/* List View */}
-        {(view === "list" || dualPane) && (
-          <FlatList
-            data={filteredEmergencies}
-            keyExtractor={(item) => item.id}
-            style={[dualPane && { flex: 1 }]}
-            contentContainerStyle={{ padding: 12 }}
-            renderItem={({ item }) => (
-              <TouchableOpacity
-                style={[
-                  styles.emergencyCard,
-                  { borderLeftColor: LEVEL_COLORS[item.level] },
-                  dualPane && { marginRight: 12 },
-                ]}
-                onPress={() => setSelectedEmergency(item)}
-                activeOpacity={0.85}
-              >
-                <View style={{ flexDirection: "row", alignItems: "center" }}>
-                  <MaterialCommunityIcons
-                    name={
-                      item.type === "Medical"
-                        ? "medical-bag"
-                        : item.type === "Fire"
-                        ? "fire"
-                        : "police-badge"
-                    }
-                    size={22}
-                    color={LEVEL_COLORS[item.level]}
-                  />
-                  <Text style={styles.emergencyType}>{item.type}</Text>
-                  <Text style={[styles.levelTag, { color: LEVEL_COLORS[item.level] }]}>
-                    {item.level === "Critical" ? "🔴" : item.level === "High" ? "🟠" : "🔵"} {item.level}
-                  </Text>
-                  <Text style={styles.statusTag}>{item.status}</Text>
-                </View>
-                <Text style={styles.emergencyUser}>
-                  <Ionicons name="person" size={14} color="#888" /> {item.user}
+      {/* List View */}
+      {view === "list" && (
+        <FlatList
+          data={filteredSOS.sort((a, b) =>
+            b.createdAt?.toMillis?.() - a.createdAt?.toMillis?.()
+          )}
+          keyExtractor={(item) => item.id}
+          style={{ flex: 1, paddingHorizontal: 12 }}
+          contentContainerStyle={{ paddingBottom: 24 }}
+          renderItem={({ item }) => (
+            <TouchableOpacity
+              style={[
+                styles.emergencyCard,
+                { borderLeftColor: LEVEL_COLORS[item.urgency] || "#2563eb" },
+              ]}
+              onPress={() => handleMarkerPress(item)}
+              activeOpacity={0.85}
+            >
+              <View style={{ flexDirection: "row", alignItems: "center" }}>
+                <MaterialCommunityIcons
+                  name={TYPE_ICONS[item.emergencyType] || "alert-circle"}
+                  size={22}
+                  color={LEVEL_COLORS[item.urgency] || "#2563eb"}
+                />
+                <Text style={styles.emergencyType}>{item.emergencyType}</Text>
+                <Text style={[styles.levelTag, { color: LEVEL_COLORS[item.urgency] || "#2563eb" }]}>
+                  {item.urgency}
                 </Text>
+                <Text style={styles.statusTag}>{item.status || "Open"}</Text>
+              </View>
+              <Text style={styles.emergencyUser}>
+                <Ionicons name="person" size={14} color="#888" /> {item.senderName || "Unknown"}
+              </Text>
+              {item.address && (
                 <Text style={styles.emergencyAddress}>
                   <Ionicons name="location" size={14} color="#3b82f6" /> {item.address}
                 </Text>
-                <View style={{ flexDirection: "row", alignItems: "center", marginTop: 2 }}>
-                  <MaterialCommunityIcons name="map-marker-distance" size={16} color="#fbbf24" />
-                  <Text style={styles.emergencyProximity}>{item.distance} km</Text>
-                  <Ionicons name="time" size={14} color="#888" style={{ marginLeft: 10 }} />
-                  <Text style={styles.emergencyTime}>{item.timeAgo}</Text>
-                </View>
-                {/* Controls */}
-                <View style={styles.actionRow}>
-                  {!item.assigned && (
-                    <>
-                      <TouchableOpacity
-                        style={[styles.actionBtn, { backgroundColor: "#22c55e22" }]}
-                        onPress={() => handleAction(item, "Accept")}
-                      >
-                        <Ionicons name="checkmark" size={18} color="#22c55e" />
-                        <Text style={[styles.actionText, { color: "#22c55e" }]}>Accept</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={[styles.actionBtn, { backgroundColor: "#ef444422" }]}
-                        onPress={() => handleAction(item, "Reject")}
-                      >
-                        <Ionicons name="close" size={18} color="#ef4444" />
-                        <Text style={[styles.actionText, { color: "#ef4444" }]}>Reject</Text>
-                      </TouchableOpacity>
-                    </>
-                  )}
-                  {item.assigned && (
-                    <TouchableOpacity
-                      style={[styles.actionBtn, { backgroundColor: "#3b82f622" }]}
-                      onPress={() => handleAction(item, "Mark as Arrived")}
-                    >
-                      <Ionicons name="flag" size={18} color="#3b82f6" />
-                      <Text style={[styles.actionText, { color: "#3b82f6" }]}>Mark as Arrived</Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
-              </TouchableOpacity>
-            )}
-            ListEmptyComponent={
-              <Text style={{ color: "#888", textAlign: "center", marginTop: 40 }}>
-                No emergencies found.
+              )}
+              <Text style={styles.emergencyDesc}>{item.description}</Text>
+              <Text style={styles.emergencyTime}>
+                <Ionicons name="time" size={14} color="#888" />{" "}
+                {item.createdAt?.toDate ? timeAgo(item.createdAt.toDate()) : ""}
               </Text>
-            }
-          />
-        )}
+              {/* Controls */}
+              {(!item.responderId || item.status !== "responded") && (
+                <View style={styles.actionRow}>
+                  <TouchableOpacity
+                    style={[styles.actionBtn, { backgroundColor: "#22c55e22" }]}
+                    onPress={() => handleRespond(item)}
+                  >
+                    <Ionicons name="checkmark" size={18} color="#22c55e" />
+                    <Text style={[styles.actionText, { color: "#22c55e" }]}>Accept & Respond</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+              {item.responderId && item.status === "responded" && (
+                <Text style={{ color: "#22c55e", fontWeight: "bold", marginTop: 6 }}>
+                  Responded by {item.responderName || "Employee"}
+                </Text>
+              )}
+            </TouchableOpacity>
+          )}
+          ListEmptyComponent={
+            <Text style={{ color: "#888", textAlign: "center", marginTop: 40 }}>
+              No emergencies found.
+            </Text>
+          }
+        />
+      )}
 
-        {/* Map View */}
-        {(view === "map" || dualPane) && (
-          <View style={[styles.mapContainer, dualPane && { flex: 1 }]}>
+      {/* Map View */}
+      {view === "map" && (
+        <View style={styles.mapContainer}>
+          {loading || !userLocation ? (
+            <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
+              <ActivityIndicator size="large" color={Colors[colorScheme].tint} />
+              <Text>Loading map...</Text>
+            </View>
+          ) : (
             <MapView
+              ref={mapRef}
               style={{ flex: 1, borderRadius: 16 }}
               initialRegion={initialRegion}
               showsUserLocation
               showsMyLocationButton
             >
-              {filteredEmergencies.map((item) => (
+              {filteredSOS.map((item) => (
                 <Marker
                   key={item.id}
-                  coordinate={item.location}
-                  pinColor={LEVEL_COLORS[item.level]}
-                  onPress={() => setSelectedEmergency(item)}
+                  coordinate={{ latitude: item.latitude, longitude: item.longitude }}
+                  pinColor={LEVEL_COLORS[item.urgency]}
+                  onPress={() => handleMarkerPress(item)}
                 >
                   <View style={styles.markerPin}>
                     <MaterialCommunityIcons
-                      name={
-                        item.type === "Medical"
-                          ? "medical-bag"
-                          : item.type === "Fire"
-                          ? "fire"
-                          : "police-badge"
-                      }
+                      name={TYPE_ICONS[item.emergencyType] || "alert-circle"}
                       size={22}
                       color="#fff"
                     />
                   </View>
                 </Marker>
               ))}
-              {/* Example: route guidance (frontend only, mock polyline) */}
-              {selectedEmergency && (
-                <Polyline
-                  coordinates={[
-                    { latitude: 28.6139, longitude: 77.209 }, // Mock responder location
-                    selectedEmergency.location,
-                  ]}
-                  strokeColor="#2563eb"
-                  strokeWidth={4}
-                />
-              )}
             </MapView>
-          </View>
-        )}
-      </View>
+          )}
+        </View>
+      )}
 
       {/* Emergency Detail Modal */}
       <Modal
-        visible={!!selectedEmergency}
+        visible={!!selectedSOS}
         transparent
         animationType="slide"
-        onRequestClose={() => setSelectedEmergency(null)}
+        onRequestClose={() => setSelectedSOS(null)}
       >
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <TouchableOpacity
-              onPress={() => setSelectedEmergency(null)}
+              onPress={() => setSelectedSOS(null)}
               style={{ position: "absolute", right: 10, top: 10, zIndex: 10 }}
             >
               <Ionicons name="close" size={28} color="#888" />
             </TouchableOpacity>
-            {selectedEmergency && (
+            {selectedSOS && (
               <>
-                <Text style={styles.modalTitle}>{selectedEmergency.type} Emergency</Text>
+                <Text style={styles.modalTitle}>{selectedSOS.emergencyType}</Text>
                 <Text style={styles.modalLevel}>
-                  <Text style={{ color: LEVEL_COLORS[selectedEmergency.level], fontWeight: "bold" }}>
-                    {selectedEmergency.level}
+                  <Text style={{ color: LEVEL_COLORS[selectedSOS.urgency], fontWeight: "bold" }}>
+                    {selectedSOS.urgency}
                   </Text>{" "}
-                  · {selectedEmergency.status}
+                  · {selectedSOS.status || "Open"}
                 </Text>
                 <Text style={styles.modalUser}>
-                  <Ionicons name="person" size={16} color="#888" /> {selectedEmergency.user}
+                  <Ionicons name="person" size={16} color="#888" /> {selectedSOS.senderName || "Unknown"}
                 </Text>
-                <Text style={styles.modalAddress}>
-                  <Ionicons name="location" size={16} color="#3b82f6" /> {selectedEmergency.address}
-                </Text>
+                {selectedSOS.address && (
+                  <Text style={styles.modalAddress}>
+                    <Ionicons name="location" size={16} color="#3b82f6" /> {selectedSOS.address}
+                  </Text>
+                )}
+                <Text style={styles.modalDesc}>{selectedSOS.description}</Text>
                 <Text style={styles.modalTime}>
-                  <Ionicons name="time" size={16} color="#888" /> {selectedEmergency.timeAgo}
+                  <Ionicons name="time" size={16} color="#888" />{" "}
+                  {selectedSOS.createdAt?.toDate ? timeAgo(selectedSOS.createdAt.toDate()) : ""}
                 </Text>
-                <View style={{ flexDirection: "row", marginTop: 18 }}>
-                  {!selectedEmergency.assigned && (
-                    <>
-                      <TouchableOpacity
-                        style={[styles.actionBtn, { backgroundColor: "#22c55e22" }]}
-                        onPress={() => handleAction(selectedEmergency, "Accept")}
-                      >
-                        <Ionicons name="checkmark" size={18} color="#22c55e" />
-                        <Text style={[styles.actionText, { color: "#22c55e" }]}>Accept</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={[styles.actionBtn, { backgroundColor: "#ef444422" }]}
-                        onPress={() => handleAction(selectedEmergency, "Reject")}
-                      >
-                        <Ionicons name="close" size={18} color="#ef4444" />
-                        <Text style={[styles.actionText, { color: "#ef4444" }]}>Reject</Text>
-                      </TouchableOpacity>
-                    </>
-                  )}
-                  {selectedEmergency.assigned && (
-                    <TouchableOpacity
-                      style={[styles.actionBtn, { backgroundColor: "#3b82f622" }]}
-                      onPress={() => handleAction(selectedEmergency, "Mark as Arrived")}
-                    >
-                      <Ionicons name="flag" size={18} color="#3b82f6" />
-                      <Text style={[styles.actionText, { color: "#3b82f6" }]}>Mark as Arrived</Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
+                {(!selectedSOS.responderId || selectedSOS.status !== "responded") && (
+                  <TouchableOpacity
+                    style={[styles.actionBtn, { backgroundColor: "#22c55e22", marginTop: 18 }]}
+                    onPress={() => handleRespond(selectedSOS)}
+                  >
+                    <Ionicons name="checkmark" size={18} color="#22c55e" />
+                    <Text style={[styles.actionText, { color: "#22c55e" }]}>Accept & Respond</Text>
+                  </TouchableOpacity>
+                )}
+                {selectedSOS.responderId && selectedSOS.status === "responded" && (
+                  <Text style={{ color: "#22c55e", fontWeight: "bold", marginTop: 18 }}>
+                    Responded by {selectedSOS.responderName || "Employee"}
+                  </Text>
+                )}
               </>
             )}
           </View>
@@ -367,6 +431,14 @@ export default function EmergencyFeedScreen() {
 }
 
 const styles = StyleSheet.create({
+  verticalRotatedText: {
+    transform: [{ rotate: "-90deg" }],
+    fontSize: 13,
+    lineHeight: 15,
+    textAlign: "center",
+    minWidth: 30,
+    fontWeight: "bold",
+  },
   headerRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -413,13 +485,27 @@ const styles = StyleSheet.create({
   filterChip: {
     backgroundColor: "#f1f5f9",
     borderRadius: 16,
-    paddingHorizontal: 14,
+    paddingHorizontal: 8,
     paddingVertical: 7,
     marginRight: 8,
     marginBottom: 8,
+    minWidth: 28,
+    alignItems: "center",
+    justifyContent: "center",
   },
   filterChipActive: {
     backgroundColor: "#2563eb",
+  },
+  verticalTextContainer: {
+    flexDirection: "column",
+    alignItems: "center",
+    justifyContent: "center",
+    minHeight: 60,
+  },
+  verticalText: {
+    fontSize: 13,
+    lineHeight: 15,
+    textAlign: "center",
   },
   emergencyCard: {
     borderRadius: 14,
@@ -465,15 +551,15 @@ const styles = StyleSheet.create({
     fontSize: 13,
     marginTop: 2,
   },
-  emergencyProximity: {
-    color: "#fbbf24",
+  emergencyDesc: {
+    color: "#222",
     fontSize: 13,
-    marginLeft: 4,
+    marginTop: 2,
   },
   emergencyTime: {
     color: "#888",
     fontSize: 13,
-    marginLeft: 4,
+    marginTop: 2,
   },
   actionRow: {
     flexDirection: "row",
@@ -541,6 +627,11 @@ const styles = StyleSheet.create({
   },
   modalAddress: {
     color: "#3b82f6",
+    fontSize: 15,
+    marginBottom: 2,
+  },
+  modalDesc: {
+    color: "#222",
     fontSize: 15,
     marginBottom: 2,
   },
