@@ -171,6 +171,21 @@ export default function HomeScreen() {
     }
   ]);
 
+  // Fetch user profile from Firestore
+  const fetchUserProfile = async (uid: string) => {
+    try {
+      const userRef = doc(db, "users", uid);
+      const userSnap = await getDoc(userRef);
+      if (userSnap.exists()) {
+        setProfile(userSnap.data());
+      } else {
+        setProfile(null);
+      }
+    } catch (e) {
+      setProfile(null);
+    }
+  };
+
   // Fetch all data
   const fetchAll = async () => {
     try {
@@ -218,6 +233,11 @@ export default function HomeScreen() {
         setWeather(null);
       }
 
+      // Fetch user profile from Firestore
+      if (user?.uid) {
+        await fetchUserProfile(user.uid);
+      }
+
       // Set notification count to 0 (or fetch from your own logic)
       setNotifCount(0);
     } catch (e) {
@@ -227,6 +247,7 @@ export default function HomeScreen() {
 
   useEffect(() => {
     fetchAll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const onRefresh = async () => {
@@ -304,7 +325,12 @@ export default function HomeScreen() {
                 fontWeight: "bold", 
                 color: colorScheme === "dark" ? "#F8FAFC" : "#0F172A" 
               }}>
-                {profile?.fullName ? profile.fullName : user?.email ? user.email.split('@')[0] : "User"}
+                {/* Show Firestore name if available, else fallback */}
+                {profile?.name
+                  ? profile.name
+                  : user?.email
+                    ? user.email.split('@')[0]
+                    : "User"}
               </Text>
             </View>
             <NotificationIcon
@@ -390,7 +416,6 @@ export default function HomeScreen() {
             </LinearGradient>
           </TouchableOpacity>
         </Animated.View>
-
 
         {/* Quick Actions Grid */}
         <Animated.View entering={FadeIn.delay(200).duration(600)}>
@@ -695,7 +720,7 @@ export default function HomeScreen() {
               </TouchableOpacity>
             ))}
           </ScrollView>
-          </Animated.View>
+        </Animated.View>
       </ScrollView>
     </SafeAreaView>
   );

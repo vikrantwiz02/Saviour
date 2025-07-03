@@ -3,43 +3,25 @@ import { Ionicons, MaterialCommunityIcons, FontAwesome, Feather } from "@expo/ve
 import { useRouter } from "expo-router";
 import React, { useState, useEffect } from "react";
 import {
-  Alert,
   Dimensions,
-  StyleSheet,
   Text,
   TouchableOpacity,
   View,
-  ActivityIndicator,
   Image,
   ScrollView,
   RefreshControl,
-  Platform,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import * as Location from "expo-location";
 import axios from "axios";
-import { collection, getDocs, query, orderBy, doc, getDoc, where } from "firebase/firestore";
+import { doc, getDoc, collection, getDocs, query, orderBy, limit, where } from "firebase/firestore";
 import { db } from "../../lib/firebase";
 import { useAuth } from "@/context/AuthContext";
-import MapView, { Heatmap, PROVIDER_GOOGLE } from "react-native-maps";
-import { LinearGradient } from "expo-linear-gradient";
 import Animated, { FadeIn } from "react-native-reanimated";
+import { LinearGradient } from "expo-linear-gradient";
 
 const { width } = Dimensions.get("window");
 const isTablet = width >= 768;
-
-type SOSRequest = {
-  id: string;
-  title: string;
-  description: string;
-  urgency: "High" | "Medium" | "Low";
-  type: string;
-  location: { latitude: number; longitude: number };
-  createdAt: string;
-  userId: string;
-  status: string;
-  isPublic?: boolean;
-};
 
 type QuickAction = {
   id: string;
@@ -48,14 +30,6 @@ type QuickAction = {
   color: string;
   route: string;
   iconSet: "Ionicons" | "MaterialCommunityIcons" | "FontAwesome" | "Feather";
-};
-
-type NewsItem = {
-  id: string;
-  title: string;
-  summary: string;
-  date: string;
-  type: "tip" | "news" | "tutorial";
 };
 
 const NotificationIcon = ({
@@ -67,182 +41,206 @@ const NotificationIcon = ({
   onPress: () => void;
   theme: string;
 }) => (
-  <TouchableOpacity onPress={onPress} style={{ marginLeft: 12 }}>
-    <Ionicons name="notifications-outline" size={30} color={theme === "dark" ? "#fff" : "#222"} />
+  <TouchableOpacity 
+    onPress={onPress} 
+    style={{ 
+      marginLeft: 12,
+      position: 'relative'
+    }}
+  >
+    <LinearGradient
+      colors={['#6E45E2', '#89D4CF']}
+      style={{
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+        justifyContent: 'center',
+        alignItems: 'center'
+      }}
+      start={{ x: 0, y: 0 }}
+      end={{ x: 1, y: 1 }}
+    >
+      <Ionicons name="notifications-outline" size={22} color="#fff" />
+    </LinearGradient>
     {unseenCount > 0 && (
       <View
         style={{
           position: "absolute",
-          right: -2,
-          top: -2,
-          backgroundColor: "#f43f5e",
-          borderRadius: 8,
-          paddingHorizontal: 5,
-          paddingVertical: 1,
-          minWidth: 16,
-          alignItems: "center",
+          right: -4,
+          top: -4,
+          backgroundColor: "#FF4757",
+          borderRadius: 10,
+          width: 20,
+          height: 20,
           justifyContent: "center",
+          alignItems: "center",
+          borderWidth: 2,
+          borderColor: theme === "dark" ? "#181a20" : "#fff"
         }}
       >
-        <Text style={{ color: "#fff", fontSize: 11, fontWeight: "bold" }}>{unseenCount}</Text>
+        <Text style={{ color: "#fff", fontSize: 10, fontWeight: "bold" }}>{unseenCount}</Text>
       </View>
     )}
   </TouchableOpacity>
 );
 
-export default function HomeScreen() {
+export default function AdminHomeScreen() {
   const colorScheme = useColorScheme() ?? "light";
-  const [sosRequests, setSosRequests] = useState<SOSRequest[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [notifCount, setNotifCount] = useState(0);
   const [weather, setWeather] = useState<any>(null);
   const [location, setLocation] = useState<{ latitude: number; longitude: number } | null>(null);
   const [refreshing, setRefreshing] = useState(false);
-  const [profile, setProfile] = useState<any>(null);
-  const [heatmapData, setHeatmapData] = useState<any[]>([]);
-  const [sosRaisedCount, setSosRaisedCount] = useState(0);
+  const [notifCount, setNotifCount] = useState(0);
+  const [adminProfile, setAdminProfile] = useState<any>(null);
+  const [userStats, setUserStats] = useState({ total: 0, pending: 0, active: 0, recent: [] as any[] });
+  const [employeeStats, setEmployeeStats] = useState({ total: 0, onDuty: 0, offDuty: 0, recent: [] as any[] });
+  const [recentRequests, setRecentRequests] = useState<any[]>([]);
+  const [recentReports, setRecentReports] = useState<any[]>([]);
   const router = useRouter();
   const { user } = useAuth();
 
-  // Quick actions configuration
+  // Quick actions for admin (2 columns)
   const quickActions: QuickAction[] = [
     {
       id: "1",
-      title: "Create SOS",
-      icon: "plus-circle",
-      color: "#ef4444",
-      route: "/sos",
+      title: "Live Monitor",
+      icon: "map",
+      color: "#1E90FF",
+      route: "/Admin/livemonitor",
       iconSet: "Feather",
     },
     {
       id: "2",
-      title: "View Map",
-      icon: "map",
-      color: "#3b82f6",
-      route: "/map",
+      title: "Manage Users",
+      icon: "users",
+      color: "#6E45E2",
+      route: "/admin/users",
       iconSet: "Feather",
     },
     {
       id: "3",
       title: "Resources",
-      icon: "book",
-      color: "#10b981",
-      route: "/resources",
+      icon: "box",
+      color: "#2ED573",
+      route: "/Resources",
       iconSet: "Feather",
     },
     {
       id: "4",
-      title: "Community",
-      icon: "users",
-      color: "#f59e0b",
-      route: "/chat",
+      title: "Reports",
+      icon: "file-text",
+      color: "#FF4757",
+      route: "/admin/reports",
       iconSet: "Feather",
     },
   ];
 
-  // Sample news and tips
-  const [newsFeed, setNewsFeed] = useState<NewsItem[]>([]);
+  // Fetch admin profile (optional, if you want to show admin name)
+  const fetchAdminProfile = async (uid: string) => {
+    try {
+      const userRef = doc(db, "users", uid);
+      const userSnap = await getDoc(userRef);
+      if (userSnap.exists()) {
+        setAdminProfile(userSnap.data());
+      } else {
+        setAdminProfile(null);
+      }
+    } catch (e) {
+      setAdminProfile(null);
+    }
+  };
 
-  // Fetch all data
+  // Fetch user and employee stats (from users collection, filtered by role)
+  const fetchStats = async () => {
+    // Users
+    const usersQ = query(collection(db, "users"), where("role", "==", "users"));
+    const usersSnap = await getDocs(usersQ);
+    let total = 0, pending = 0, active = 0;
+    let recentUsers: any[] = [];
+    usersSnap.forEach(doc => {
+      total++;
+      const d = doc.data();
+      if (d.status === "pending") pending++;
+      if (d.status === "active") active++;
+      recentUsers.push({ id: doc.id, ...d });
+    });
+    // Sort by createdAt desc and take 5
+    recentUsers = recentUsers
+      .filter(u => u.createdAt)
+      .sort((a, b) => b.createdAt?.seconds - a.createdAt?.seconds)
+      .slice(0, 5);
+    setUserStats({ total, pending, active, recent: recentUsers });
+
+    // Employees
+    const empQ = query(collection(db, "users"), where("role", "==", "employee"));
+    const empSnap = await getDocs(empQ);
+    let empTotal = 0, onDuty = 0, offDuty = 0;
+    let recentEmps: any[] = [];
+    empSnap.forEach(doc => {
+      empTotal++;
+      const d = doc.data();
+      if (d.status === "onDuty") onDuty++;
+      if (d.status === "offDuty") offDuty++;
+      recentEmps.push({ id: doc.id, ...d });
+    });
+    // Sort by lastLogin desc and take 5
+    recentEmps = recentEmps
+      .filter(e => e.lastLogin)
+      .sort((a, b) => b.lastLogin?.seconds - a.lastLogin?.seconds)
+      .slice(0, 5);
+    setEmployeeStats({ total: empTotal, onDuty, offDuty, recent: recentEmps });
+  };
+
+  // Fetch recent requests (resource or SOS)
+  const fetchRecentRequests = async () => {
+    const q = query(collection(db, "requests"), orderBy("createdAt", "desc"), limit(5));
+    const snap = await getDocs(q);
+    setRecentRequests(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+  };
+
+  // Fetch recent reports
+  const fetchRecentReports = async () => {
+    const q = query(collection(db, "reports"), orderBy("createdAt", "desc"), limit(5));
+    const snap = await getDocs(q);
+    setRecentReports(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+  };
+
+  // Fetch weather and all admin data
   const fetchAll = async () => {
     try {
       let { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== "granted") {
-        Alert.alert("Permission required", "Location permission is needed for app functionality.");
-        return;
-      }
+      if (status !== "granted") return;
       let loc = await Location.getCurrentPositionAsync({});
-      setLocation({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
+      const coords = { latitude: loc.coords.latitude, longitude: loc.coords.longitude };
+      setLocation(coords);
 
-      // Fetch weather
+      // Weather
       const apiKey = "475dad9f469397c42f28ed2ce92b2537";
       try {
         const weatherResp = await axios.get(
-          `https://api.openweathermap.org/data/2.5/weather?lat=${loc.coords.latitude}&lon=${loc.coords.longitude}&units=metric&appid=${apiKey}`
+          `https://api.openweathermap.org/data/2.5/weather?lat=${coords.latitude}&lon=${coords.longitude}&units=metric&appid=${apiKey}`
         );
         setWeather(weatherResp.data);
       } catch (err) {
-        console.log("Weather error:", err);
+        setWeather(null);
       }
 
-      // Fetch profile
-      if (user) {
-        const docSnap = await getDoc(doc(db, "users", user.uid));
-        if (docSnap.exists()) setProfile(docSnap.data());
-      }
+      // Admin profile
+      if (user?.uid) await fetchAdminProfile(user.uid);
 
-      // Fetch SOS requests
-      await fetchSOS();
-      // Fetch SOS raised count for current user
-      await fetchSosRaisedCount();
+      // Stats and recent data
+      await fetchStats();
+      await fetchRecentRequests();
+      await fetchRecentReports();
+
+      setNotifCount(0); // Replace with your logic
     } catch (e) {
-      console.error("Error fetching data:", e);
-    }
-  };
-
-  // Fetch SOS requests (all public)
-  const fetchSOS = async () => {
-    setLoading(true);
-    try {
-      const q = query(collection(db, "sos_requests"), orderBy("createdAt", "desc"));
-      const querySnapshot = await getDocs(q);
-      const requests: SOSRequest[] = [];
-      querySnapshot.forEach((docSnap) => {
-        const data = docSnap.data();
-        requests.push({
-          id: docSnap.id,
-          title: data.title || data.emergencyType || "SOS",
-          description: data.description,
-          urgency: data.urgency,
-          type: data.type || data.emergencyType || "General",
-          location: {
-            latitude: data.latitude,
-            longitude: data.longitude,
-          },
-          createdAt: data.createdAt,
-          userId: data.userId,
-          status: data.status || "new",
-          isPublic: data.isPublic,
-        });
-      });
-      // Only show public SOS to everyone
-      setSosRequests(requests.filter(r => r.isPublic !== false));
-      setNotifCount(requests.filter(r => r.status === "new" && r.isPublic !== false).length);
-
-      // Generate heatmap data
-      if (requests.length > 0) {
-        const heatmapPoints = requests.map(request => ({
-          latitude: request.location.latitude,
-          longitude: request.location.longitude,
-          weight: request.urgency === "High" ? 0.8 : request.urgency === "Medium" ? 0.5 : 0.3
-        }));
-        setHeatmapData(heatmapPoints);
-      }
-    } catch (e) {
-      console.error("Error fetching SOS requests:", e);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Fetch SOS raised count for current user
-  const fetchSosRaisedCount = async () => {
-    if (!user) return;
-    try {
-      const q = query(
-        collection(db, "sos_requests"),
-        where("userId", "==", user.uid),
-        where("isPublic", "==", true)
-      );
-      const querySnapshot = await getDocs(q);
-      setSosRaisedCount(querySnapshot.size);
-    } catch (e) {
-      setSosRaisedCount(0);
+      // Handle error
     }
   };
 
   useEffect(() => {
     fetchAll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const onRefresh = async () => {
@@ -273,20 +271,69 @@ export default function HomeScreen() {
     }
   };
 
+  const getWeatherGradient = () => {
+    if (!weather) return ['#6E45E2', '#89D4CF'];
+    const weatherMain = weather.weather[0].main.toLowerCase();
+    if (weatherMain.includes('rain')) return ['#4B79CF', '#4B79CF'];
+    if (weatherMain.includes('cloud')) return ['#B7B7B7', '#5C5C5C'];
+    if (weatherMain.includes('sun') || weatherMain.includes('clear')) return ['#FF7E5F', '#FEB47B'];
+    return ['#6E45E2', '#89D4CF'];
+  };
+
+  // Helper for 2-column quick actions
+  const getQuickActionRows = () => {
+    const rows = [];
+    for (let i = 0; i < quickActions.length; i += 2) {
+      rows.push(quickActions.slice(i, i + 2));
+    }
+    return rows;
+  };
+
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: colorScheme === "dark" ? "#181a20" : "#fff" }}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: colorScheme === "dark" ? "#0F172A" : "#F8FAFC" }}>
       <ScrollView
         style={{ flex: 1 }}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-        contentContainerStyle={{ paddingHorizontal: isTablet ? 40 : 16, paddingBottom: 40, flexGrow: 1 }}
+        refreshControl={
+          <RefreshControl 
+            refreshing={refreshing} 
+            onRefresh={onRefresh} 
+            colors={['#6E45E2']}
+            tintColor={'#6E45E2'}
+          />
+        }
+        contentContainerStyle={{ paddingBottom: 40, flexGrow: 1 }}
         alwaysBounceVertical
       >
         {/* Header with greeting and notification */}
         <Animated.View entering={FadeIn.duration(600)}>
-          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 18, marginBottom: 8 }}>
-            <Text style={{ fontSize: isTablet ? 28 : 22, fontWeight: "bold", color: colorScheme === "dark" ? "#fff" : "#222" }}>
-              {greeting()}{profile?.fullName ? `, ${profile.fullName}` : user?.email ? `, ${user.email.split('@')[0]}` : ""}!
-            </Text>
+          <View style={{ 
+            flexDirection: "row", 
+            justifyContent: "space-between", 
+            alignItems: "center", 
+            paddingHorizontal: 24,
+            paddingTop: 24,
+            paddingBottom: 16
+          }}>
+            <View>
+              <Text style={{ 
+                fontSize: 14, 
+                color: colorScheme === "dark" ? "#94A3B8" : "#64748B",
+                marginBottom: 4
+              }}>
+                {greeting()}
+              </Text>
+              <Text style={{ 
+                fontSize: isTablet ? 28 : 24, 
+                fontWeight: "bold", 
+                color: colorScheme === "dark" ? "#F8FAFC" : "#0F172A" 
+              }}>
+                {adminProfile?.name
+                  ? adminProfile.name
+                  : user?.email
+                    ? user.email.split('@')[0]
+                    : "Admin"}
+              </Text>
+            </View>
             <NotificationIcon
               unseenCount={notifCount}
               onPress={() => router.push("/Notifications")}
@@ -295,408 +342,318 @@ export default function HomeScreen() {
           </View>
         </Animated.View>
 
-        {/* Profile Summary */}
+        {/* Weather Card */}
         <Animated.View entering={FadeIn.delay(100).duration(600)}>
-          <LinearGradient
-            colors={colorScheme === "dark"
-              ? ["#23272e", "#181a20"]
-              : ["#f3f4f6", "#fff"]}
-            style={{
-              borderRadius: 16,
-              padding: 16,
-              marginBottom: 16,
-              flexDirection: "row",
-              alignItems: "center"
-            }}
+          <TouchableOpacity
+            activeOpacity={0.85}
+            onPress={() => router.push("/Weather-Forecast")}
           >
-            <Image
-              source={profile?.photo ? { uri: profile.photo } : require("../../assets/images/default-avatar.png")}
-              style={{ width: 56, height: 56, borderRadius: 28, marginRight: 14 }}
-            />
-            <View style={{ flex: 1 }}>
-              {profile ? (
+            <LinearGradient
+              colors={getWeatherGradient() as any}
+              style={{
+                borderRadius: 24,
+                padding: 20,
+                marginHorizontal: 24,
+                marginBottom: 24,
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+                shadowColor: "#000",
+                shadowOffset: {
+                  width: 0,
+                  height: 4,
+                },
+                shadowOpacity: 0.1,
+                shadowRadius: 10,
+                elevation: 8
+              }}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+            >
+              {weather && weather.weather && weather.weather[0] ? (
                 <>
-                  <Text style={{ fontWeight: "bold", fontSize: 17, color: colorScheme === "dark" ? "#fff" : "#222" }}>
-                    {profile.fullName}
-                  </Text>
-                  <Text style={{ color: "#888" }}>{profile.city || "Unknown location"}</Text>
-                  <Text style={{ color: "#888" }}>{profile.role ? profile.role.toUpperCase() : "USER"}</Text>
+                  <View>
+                    <Text style={{
+                      fontWeight: "bold",
+                      fontSize: 18,
+                      color: "#fff",
+                      marginBottom: 4
+                    }}>
+                      {weather.name}
+                    </Text>
+                    <Text style={{
+                      fontSize: 32,
+                      fontWeight: '800',
+                      color: "#fff",
+                      marginBottom: 4
+                    }}>
+                      {Math.round(weather.main.temp)}°C
+                    </Text>
+                    <Text style={{
+                      fontSize: 14,
+                      color: "rgba(255,255,255,0.8)"
+                    }}>
+                      {weather.weather[0].description}
+                    </Text>
+                    <Text style={{
+                      fontSize: 12,
+                      color: "rgba(255,255,255,0.7)",
+                      marginTop: 4
+                    }}>
+                      Lat: {location?.latitude?.toFixed(4)}, Lon: {location?.longitude?.toFixed(4)}
+                    </Text>
+                  </View>
+                  <Image
+                    source={{ uri: `https://openweathermap.org/img/wn/${weather.weather[0].icon}@4x.png` }}
+                    style={{ width: 120, height: 120 }}
+                    resizeMode="contain"
+                  />
                 </>
               ) : (
-                <Text style={{ color: "#888" }}>Loading profile...</Text>
-              )}
-            </View>
-          </LinearGradient>
-        </Animated.View>
-
-        {/* Weather Card */}
-        <Animated.View entering={FadeIn.delay(200).duration(600)}>
-          <LinearGradient
-            colors={colorScheme === "dark"
-              ? ["#23272e", "#23272e"]
-              : ["#fffbe6", "#fff"]}
-            style={{
-              borderRadius: 16,
-              padding: 16,
-              marginBottom: 16,
-              borderWidth: 1,
-              borderColor: colorScheme === "dark" ? "#444" : "#fbbf24",
-            }}
-          >
-            {weather ? (
-              <View style={{ flexDirection: "row", alignItems: "center" }}>
-                <Ionicons
-                  name={weather.weather[0].main.includes("Rain") ? "rainy" :
-                    weather.weather[0].main.includes("Cloud") ? "cloudy" : "sunny"}
-                  size={40}
-                  color={colorScheme === "dark" ? "#ffd700" : "#f59e0b"}
-                />
-                <View style={{ marginLeft: 14 }}>
-                  <Text style={{ fontSize: isTablet ? 32 : 22, fontWeight: "bold", color: colorScheme === "dark" ? "#ffd700" : "#f59e42" }}>
-                    {Math.round(weather.main.temp)}°C
-                  </Text>
-                  <Text style={{ fontSize: isTablet ? 18 : 15, color: colorScheme === "dark" ? "#fff" : "#b08900" }}>
-                    {weather.weather[0].main}, {weather.name}
-                  </Text>
+                <View style={{ flex: 1, alignItems: "center" }}>
+                  <Text style={{ color: "#fff" }}>Weather unavailable</Text>
                 </View>
-              </View>
-            ) : (
-              <View style={{ flexDirection: "row", alignItems: "center" }}>
-                <ActivityIndicator size="small" color={colorScheme === "dark" ? "#fff" : "#888"} />
-                <Text style={{ marginLeft: 10, color: "#888" }}>Loading weather...</Text>
-              </View>
-            )}
-          </LinearGradient>
+              )}
+            </LinearGradient>
+          </TouchableOpacity>
         </Animated.View>
 
-        {/* Quick Actions Grid */}
-        <Animated.View entering={FadeIn.delay(300).duration(600)}>
+        {/* Quick Actions (2 columns) */}
+        <Animated.View entering={FadeIn.delay(200).duration(600)}>
           <Text style={{
             fontWeight: "600",
-            fontSize: 16,
-            marginBottom: 12,
-            color: colorScheme === "dark" ? "#fff" : "#222"
+            fontSize: 18,
+            marginBottom: 16,
+            marginHorizontal: 24,
+            color: colorScheme === "dark" ? "#F8FAFC" : "#0F172A"
           }}>
             Quick Actions
           </Text>
           <View style={{
-            flexDirection: "row",
-            flexWrap: "wrap",
-            justifyContent: "space-between",
-            gap: 12
+            gap: 14,
+            marginBottom: 24,
+            paddingHorizontal: 24,
           }}>
-            {quickActions.map((action) => (
-              <TouchableOpacity
-                key={action.id}
-                style={{
-                  width: isTablet ? "48%" : "48%",
-                  backgroundColor: colorScheme === "dark" ? "#23272e" : "#fff",
-                  borderRadius: 12,
-                  padding: 16,
-                  alignItems: "center",
-                  justifyContent: "center",
-                  borderWidth: 1,
-                  borderColor: colorScheme === "dark" ? "#444" : "#e5e7eb",
-                  shadowColor: "#000",
-                  shadowOffset: { width: 0, height: 2 },
-                  shadowOpacity: 0.1,
-                  shadowRadius: 4,
-                  elevation: 2,
-                  marginBottom: 8,
-                }}
-                onPress={() => {
-                  router.push(action.route as any);
-                }}
-              >
-                {renderIcon(action.iconSet, action.icon, 28, action.color)}
-                <Text style={{
-                  marginTop: 8,
-                  fontWeight: "600",
-                  color: colorScheme === "dark" ? "#fff" : "#222",
-                  textAlign: "center"
-                }}>
-                  {action.title}
-                </Text>
-              </TouchableOpacity>
+            {getQuickActionRows().map((row, idx) => (
+              <View key={idx} style={{ flexDirection: "row", gap: 14 }}>
+                {row.map((action) => (
+                  <TouchableOpacity
+                    key={action.id}
+                    onPress={() => router.push(action.route as any)}
+                    style={{
+                      flex: 1,
+                      backgroundColor: colorScheme === "dark" ? "#1E293B" : "#FFFFFF",
+                      borderRadius: 16,
+                      padding: 20,
+                      alignItems: "center",
+                      justifyContent: "center",
+                      shadowColor: "#000",
+                      shadowOffset: {
+                        width: 0,
+                        height: 2,
+                      },
+                      shadowOpacity: 0.1,
+                      shadowRadius: 4,
+                      elevation: 3
+                    }}
+                  >
+                    <View style={{
+                      width: 48,
+                      height: 48,
+                      borderRadius: 24,
+                      backgroundColor: `${action.color}20`,
+                      justifyContent: "center",
+                      alignItems: "center",
+                      marginBottom: 12
+                    }}>
+                      {renderIcon(action.iconSet, action.icon, 24, action.color)}
+                    </View>
+                    <Text style={{
+                      fontWeight: "600",
+                      color: colorScheme === "dark" ? "#F8FAFC" : "#0F172A",
+                      textAlign: "center"
+                    }}>
+                      {action.title}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+                {/* If odd number, fill with empty View (no text inside) */}
+                {row.length === 1 && <View style={{ flex: 1 }} />}
+              </View>
             ))}
           </View>
         </Animated.View>
 
-        {/* Nearby Emergency Heatmap Preview */}
-        <Animated.View entering={FadeIn.delay(400).duration(600)}>
-          <Text style={{
-            fontWeight: "600",
-            fontSize: 16,
-            marginBottom: 12,
-            color: colorScheme === "dark" ? "#fff" : "#222"
-          }}>
-            Nearby Emergency Heatmap
-          </Text>
+        {/* User & Employee Overview */}
+        <Animated.View entering={FadeIn.delay(300).duration(600)}>
           <View style={{
-            backgroundColor: colorScheme === "dark" ? "#23272e" : "#fff",
-            borderRadius: 16,
-            height: 200,
-            overflow: "hidden",
-            borderWidth: 1,
-            borderColor: colorScheme === "dark" ? "#444" : "#e5e7eb",
+            marginHorizontal: 24,
+            marginBottom: 24,
+            flexDirection: "row",
+            gap: 16,
+            flexWrap: "wrap"
           }}>
-            {location ? (
-              <MapView
-                style={{ flex: 1 }}
-                provider={PROVIDER_GOOGLE}
-                initialRegion={{
-                  latitude: location.latitude,
-                  longitude: location.longitude,
-                  latitudeDelta: 0.0922,
-                  longitudeDelta: 0.0421,
-                }}
-                scrollEnabled={false}
-                zoomEnabled={false}
-                pitchEnabled={false}
-                rotateEnabled={false}
-              >
-                {heatmapData.length > 0 && (
-                  <Heatmap
-                    points={heatmapData}
-                    opacity={1}
-                    radius={50}
-                    gradient={{
-                      colors: ["#00f", "#0ff", "#0f0", "#ff0", "#f00"],
-                      startPoints: [0.01, 0.25, 0.5, 0.75, 1],
-                      colorMapSize: 256
-                    }}
-                  />
-                )}
-              </MapView>
-            ) : (
-              <View style={{
+            {/* Users */}
+            <LinearGradient
+              colors={['#6E45E2', '#89D4CF']}
+              style={{
                 flex: 1,
-                justifyContent: "center",
-                alignItems: "center",
-                backgroundColor: colorScheme === "dark" ? "#1e1e1e" : "#f3f4f6"
-              }}>
-                <ActivityIndicator size="small" color={colorScheme === "dark" ? "#fff" : "#888"} />
-                <Text style={{ marginTop: 8, color: "#888" }}>Loading map...</Text>
-              </View>
+                borderRadius: 16,
+                padding: 16,
+                marginBottom: 12,
+                minWidth: 160,
+                marginRight: 8,
+              }}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+            >
+              <Feather name="users" size={24} color="#fff" style={{ marginBottom: 8 }} />
+              <Text style={{ color: "#fff", fontWeight: "bold", fontSize: 16 }}>Users</Text>
+              <Text style={{ color: "#fff", fontSize: 14, marginTop: 4 }}>Total: {userStats.total}</Text>
+              <Text style={{ color: "#fff", fontSize: 14 }}>Pending: {userStats.pending}</Text>
+              <Text style={{ color: "#fff", fontSize: 14 }}>Active: {userStats.active}</Text>
+            </LinearGradient>
+            {/* Employees */}
+            <LinearGradient
+              colors={['#FFA502', '#FFD580']}
+              style={{
+                flex: 1,
+                borderRadius: 16,
+                padding: 16,
+                marginBottom: 12,
+                minWidth: 160,
+              }}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+            >
+              <Feather name="user-check" size={24} color="#fff" style={{ marginBottom: 8 }} />
+              <Text style={{ color: "#fff", fontWeight: "bold", fontSize: 16 }}>Employees</Text>
+              <Text style={{ color: "#fff", fontSize: 14, marginTop: 4 }}>Total: {employeeStats.total}</Text>
+              <Text style={{ color: "#fff", fontSize: 14 }}>On Duty: {employeeStats.onDuty}</Text>
+              <Text style={{ color: "#fff", fontSize: 14 }}>Off Duty: {employeeStats.offDuty}</Text>
+            </LinearGradient>
+          </View>
+        </Animated.View>
+
+        {/* Recent User Registrations */}
+        <Animated.View entering={FadeIn.delay(350).duration(600)}>
+          <View style={{
+            marginHorizontal: 24,
+            marginBottom: 8,
+            flexDirection: "row",
+            justifyContent: "space-between",
+            alignItems: "center"
+          }}>
+            <Text style={{
+              fontWeight: "600",
+              fontSize: 18,
+              color: colorScheme === "dark" ? "#F8FAFC" : "#0F172A"
+            }}>
+              Recent User Registrations
+            </Text>
+          </View>
+          <View style={{ marginHorizontal: 24, marginBottom: 16 }}>
+            {userStats.recent.length === 0 ? (
+              <Text style={{ color: colorScheme === "dark" ? "#94A3B8" : "#64748B" }}>No recent users.</Text>
+            ) : (
+              userStats.recent.map((u) => (
+                <View key={u.id} style={{
+                  backgroundColor: colorScheme === "dark" ? "#232946" : "#F3F6FD",
+                  borderRadius: 12,
+                  padding: 14,
+                  marginBottom: 10,
+                  flexDirection: "row",
+                  alignItems: "center",
+                  justifyContent: "space-between"
+                }}>
+                  <View>
+                    <Text style={{ fontWeight: "bold", color: colorScheme === "dark" ? "#F8FAFC" : "#0F172A" }}>
+                      {u.name || u.email || "User"}
+                    </Text>
+                    <Text style={{ color: colorScheme === "dark" ? "#94A3B8" : "#64748B", fontSize: 13 }}>
+                      {u.status ? u.status.charAt(0).toUpperCase() + u.status.slice(1) : ""}
+                    </Text>
+                  </View>
+                  <Text style={{ color: "#6E45E2", fontWeight: "bold", fontSize: 13 }}>
+                    {u.createdAt?.toDate
+                      ? u.createdAt.toDate().toLocaleDateString()
+                      : ""}
+                  </Text>
+                </View>
+              ))
             )}
           </View>
         </Animated.View>
 
-        {/* My Activity Summary */}
-        <Animated.View entering={FadeIn.delay(500).duration(600)}>
-          <Text style={{
-            fontWeight: "600",
-            fontSize: 16,
-            marginBottom: 12,
-            color: colorScheme === "dark" ? "#fff" : "#222"
-          }}>
-            My Activity Summary
-          </Text>
+        {/* Recent Employee Logins */}
+        <Animated.View entering={FadeIn.delay(375).duration(600)}>
           <View style={{
+            marginHorizontal: 24,
+            marginBottom: 8,
             flexDirection: "row",
             justifyContent: "space-between",
-            gap: 12
-          }}>
-            {/* SOS Raised Card */}
-            <View style={{
-              flex: 1,
-              backgroundColor: colorScheme === "dark" ? "#23272e" : "#fff",
-              borderRadius: 12,
-              padding: 16,
-              borderWidth: 1,
-              borderColor: colorScheme === "dark" ? "#444" : "#e5e7eb",
-              alignItems: "center"
-            }}>
-              <View style={{
-                width: 48,
-                height: 48,
-                borderRadius: 24,
-                backgroundColor: "#fef2f2",
-                justifyContent: "center",
-                alignItems: "center",
-                marginBottom: 8
-              }}>
-                <Feather name="alert-triangle" size={24} color="#ef4444" />
-              </View>
-              <Text style={{
-                fontSize: 24,
-                fontWeight: "bold",
-                color: colorScheme === "dark" ? "#fff" : "#222",
-                marginBottom: 4
-              }}>
-                {sosRaisedCount}
-              </Text>
-              <Text style={{
-                fontSize: 12,
-                color: "#888",
-                textAlign: "center"
-              }}>
-                SOS Raised
-              </Text>
-            </View>
-
-            {/* Help Provided Card */}
-            <View style={{
-              flex: 1,
-              backgroundColor: colorScheme === "dark" ? "#23272e" : "#fff",
-              borderRadius: 12,
-              padding: 16,
-              borderWidth: 1,
-              borderColor: colorScheme === "dark" ? "#444" : "#e5e7eb",
-              alignItems: "center"
-            }}>
-              <View style={{
-                width: 48,
-                height: 48,
-                borderRadius: 24,
-                backgroundColor: "#f0fdf4",
-                justifyContent: "center",
-                alignItems: "center",
-                marginBottom: 8
-              }}>
-                <Feather name="heart" size={24} color="#10b981" />
-              </View>
-              <Text style={{
-                fontSize: 24,
-                fontWeight: "bold",
-                color: colorScheme === "dark" ? "#fff" : "#222",
-                marginBottom: 4
-              }}>
-                {profile?.helpProvided || 0}
-              </Text>
-              <Text style={{
-                fontSize: 12,
-                color: "#888",
-                textAlign: "center"
-              }}>
-                Help Provided
-              </Text>
-            </View>
-
-            {/* Trust Rating Card */}
-            <View style={{
-              flex: 1,
-              backgroundColor: colorScheme === "dark" ? "#23272e" : "#fff",
-              borderRadius: 12,
-              padding: 16,
-              borderWidth: 1,
-              borderColor: colorScheme === "dark" ? "#444" : "#e5e7eb",
-              alignItems: "center"
-            }}>
-              <View style={{
-                width: 48,
-                height: 48,
-                borderRadius: 24,
-                backgroundColor: "#eff6ff",
-                justifyContent: "center",
-                alignItems: "center",
-                marginBottom: 8
-              }}>
-                <Feather name="star" size={24} color="#3b82f6" />
-              </View>
-              <Text style={{
-                fontSize: 24,
-                fontWeight: "bold",
-                color: colorScheme === "dark" ? "#fff" : "#222",
-                marginBottom: 4
-              }}>
-                {profile?.trustRating ? profile.trustRating.toFixed(1) : "0.0"}
-              </Text>
-              <Text style={{
-                fontSize: 12,
-                color: "#888",
-                textAlign: "center"
-              }}>
-                Trust Rating
-              </Text>
-            </View>
-          </View>
-        </Animated.View>
-
-        {/* Community Impact Snapshot */}
-        <Animated.View entering={FadeIn.delay(600).duration(600)}>
-          <Text style={{
-            fontWeight: "600",
-            fontSize: 16,
-            marginBottom: 12,
-            color: colorScheme === "dark" ? "#fff" : "#222"
-          }}>
-            Community Impact
-          </Text>
-          <View style={{
-            backgroundColor: colorScheme === "dark" ? "#23272e" : "#fff",
-            borderRadius: 16,
-            padding: 16,
-            borderWidth: 1,
-            borderColor: colorScheme === "dark" ? "#444" : "#e5e7eb",
-          }}>
-            <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 8 }}>
-              <View style={{
-                width: 40,
-                height: 40,
-                borderRadius: 20,
-                backgroundColor: colorScheme === "dark" ? "#374151" : "#e0f2fe",
-                justifyContent: "center",
-                alignItems: "center",
-                marginRight: 12
-              }}>
-                <Feather name="users" size={20} color="#0ea5e9" />
-              </View>
-              <View>
-                <Text style={{
-                  fontWeight: "bold",
-                  color: colorScheme === "dark" ? "#fff" : "#222",
-                  fontSize: 16
-                }}>
-                  {sosRequests.length > 0 ?
-                    `${Math.floor(sosRequests.length / 3)} people helped nearby this week` :
-                    "Community data loading"}
-                </Text>
-                <Text style={{
-                  color: "#888",
-                  fontSize: 12
-                }}>
-                  {sosRequests.length > 0 ?
-                    "Your neighborhood is actively responding to emergencies" :
-                    "Check back soon for community updates"}
-                </Text>
-              </View>
-            </View>
-            <View style={{
-              height: 6,
-              backgroundColor: colorScheme === "dark" ? "#374151" : "#e5e7eb",
-              borderRadius: 3,
-              marginTop: 8,
-              overflow: "hidden"
-            }}>
-              <View style={{
-                width: `${sosRequests.length > 0 ? Math.min(100, sosRequests.length * 10) : 0}%`,
-                height: "100%",
-                backgroundColor: "#0ea5e9",
-                borderRadius: 3
-              }} />
-            </View>
-          </View>
-        </Animated.View>
-
-        {/* Quick Tips & News Feed */}
-        <Animated.View entering={FadeIn.delay(700).duration(600)}>
-          <View style={{
-            flexDirection: "row",
-            justifyContent: "space-between",
-            alignItems: "center",
-            marginBottom: 12
+            alignItems: "center"
           }}>
             <Text style={{
               fontWeight: "600",
-              fontSize: 16,
-              color: colorScheme === "dark" ? "#fff" : "#222"
+              fontSize: 18,
+              color: colorScheme === "dark" ? "#F8FAFC" : "#0F172A"
             }}>
-              Quick Tips & News
+              Recent Employee Logins
             </Text>
-            <TouchableOpacity onPress={() => router.push("./news")}>
+          </View>
+          <View style={{ marginHorizontal: 24, marginBottom: 16 }}>
+            {employeeStats.recent.length === 0 ? (
+              <Text style={{ color: colorScheme === "dark" ? "#94A3B8" : "#64748B" }}>No recent logins.</Text>
+            ) : (
+              employeeStats.recent.map((e) => (
+                <View key={e.id} style={{
+                  backgroundColor: colorScheme === "dark" ? "#232946" : "#F3F6FD",
+                  borderRadius: 12,
+                  padding: 14,
+                  marginBottom: 10,
+                  flexDirection: "row",
+                  alignItems: "center",
+                  justifyContent: "space-between"
+                }}>
+                  <View>
+                    <Text style={{ fontWeight: "bold", color: colorScheme === "dark" ? "#F8FAFC" : "#0F172A" }}>
+                      {e.name || e.email || "Employee"}
+                    </Text>
+                    <Text style={{ color: colorScheme === "dark" ? "#94A3B8" : "#64748B", fontSize: 13 }}>
+                      {e.status ? e.status.charAt(0).toUpperCase() + e.status.slice(1) : ""}
+                    </Text>
+                  </View>
+                  <Text style={{ color: "#FFA502", fontWeight: "bold", fontSize: 13 }}>
+                    {e.lastLogin?.toDate
+                      ? e.lastLogin.toDate().toLocaleDateString()
+                      : ""}
+                  </Text>
+                </View>
+              ))
+            )}
+          </View>
+        </Animated.View>
+
+        {/* Recent Requests */}
+        <Animated.View entering={FadeIn.delay(400).duration(600)}>
+          <View style={{
+            marginHorizontal: 24,
+            marginBottom: 8,
+            flexDirection: "row",
+            justifyContent: "space-between",
+            alignItems: "center"
+          }}>
+            <Text style={{
+              fontWeight: "600",
+              fontSize: 18,
+              color: colorScheme === "dark" ? "#F8FAFC" : "#0F172A"
+            }}>
+              Recent Requests
+            </Text>
+            <TouchableOpacity onPress={() => router.push("./admin/requests")}>
               <Text style={{
-                color: "#3b82f6",
+                color: "#6E45E2",
                 fontSize: 14,
                 fontWeight: "500"
               }}>
@@ -704,87 +661,97 @@ export default function HomeScreen() {
               </Text>
             </TouchableOpacity>
           </View>
-
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={{ gap: 12 }}
-          >
-            {newsFeed.length > 0 ? (
-              newsFeed.map((item) => (
-                <View
-                  key={item.id}
-                  style={{
-                    width: 200,
-                    backgroundColor: colorScheme === "dark" ? "#23272e" : "#fff",
-                    borderRadius: 12,
-                    padding: 16,
-                    borderWidth: 1,
-                    borderColor: colorScheme === "dark" ? "#444" : "#e5e7eb",
-                  }}
-                >
-                  <View style={{
-                    width: 32,
-                    height: 32,
-                    borderRadius: 16,
-                    backgroundColor: item.type === "tip" ? "#f0fdf4" :
-                      item.type === "news" ? "#eff6ff" : "#fef2f2",
-                    justifyContent: "center",
-                    alignItems: "center",
-                    marginBottom: 8
-                  }}>
-                    <Feather
-                      name={item.type === "tip" ? "info" :
-                        item.type === "news" ? "bell" : "book"}
-                      size={16}
-                      color={item.type === "tip" ? "#10b981" :
-                        item.type === "news" ? "#3b82f6" : "#ef4444"}
-                    />
+          <View style={{ marginHorizontal: 24, marginBottom: 16 }}>
+            {recentRequests.length === 0 ? (
+              <Text style={{ color: colorScheme === "dark" ? "#94A3B8" : "#64748B" }}>No recent requests.</Text>
+            ) : (
+              recentRequests.map((req) => (
+                <View key={req.id} style={{
+                  backgroundColor: colorScheme === "dark" ? "#232946" : "#F3F6FD",
+                  borderRadius: 12,
+                  padding: 14,
+                  marginBottom: 10,
+                  flexDirection: "row",
+                  alignItems: "center",
+                  justifyContent: "space-between"
+                }}>
+                  <View>
+                    <Text style={{ fontWeight: "bold", color: colorScheme === "dark" ? "#F8FAFC" : "#0F172A" }}>
+                      {req.resourceName || req.type || "Request"}
+                    </Text>
+                    <Text style={{ color: colorScheme === "dark" ? "#94A3B8" : "#64748B", fontSize: 13 }}>
+                      {req.status ? req.status.charAt(0).toUpperCase() + req.status.slice(1) : ""}
+                      {req.quantity ? ` • Qty: ${req.quantity}` : ""}
+                    </Text>
                   </View>
-                  <Text style={{
-                    fontWeight: "bold",
-                    color: colorScheme === "dark" ? "#fff" : "#222",
-                    marginBottom: 4
-                  }}>
-                    {item.title}
-                  </Text>
-                  <Text style={{
-                    color: "#888",
-                    fontSize: 12,
-                    marginBottom: 8
-                  }}>
-                    {item.summary}
-                  </Text>
-                  <Text style={{
-                    color: "#3b82f6",
-                    fontSize: 10
-                  }}>
-                    {item.date}
+                  <Text style={{ color: "#6E45E2", fontWeight: "bold", fontSize: 13 }}>
+                    {req.createdAt?.toDate
+                      ? req.createdAt.toDate().toLocaleDateString()
+                      : ""}
                   </Text>
                 </View>
               ))
-            ) : (
-              <View style={{
-                width: 200,
-                backgroundColor: colorScheme === "dark" ? "#23272e" : "#fff",
-                borderRadius: 12,
-                padding: 16,
-                borderWidth: 1,
-                borderColor: colorScheme === "dark" ? "#444" : "#e5e7eb",
-                justifyContent: "center",
-                alignItems: "center"
-              }}>
-                <Feather name="info" size={24} color="#888" />
-                <Text style={{
-                  color: "#888",
-                  marginTop: 8,
-                  textAlign: "center"
-                }}>
-                  No tips or news available
-                </Text>
-              </View>
             )}
-          </ScrollView>
+          </View>
+        </Animated.View>
+
+        {/* Recent Reports */}
+        <Animated.View entering={FadeIn.delay(500).duration(600)}>
+          <View style={{
+            marginHorizontal: 24,
+            marginBottom: 8,
+            flexDirection: "row",
+            justifyContent: "space-between",
+            alignItems: "center"
+          }}>
+            <Text style={{
+              fontWeight: "600",
+              fontSize: 18,
+              color: colorScheme === "dark" ? "#F8FAFC" : "#0F172A"
+            }}>
+              Recent Reports
+            </Text>
+            <TouchableOpacity onPress={() => router.push("./admin/reports")}>
+              <Text style={{
+                color: "#6E45E2",
+                fontSize: 14,
+                fontWeight: "500"
+              }}>
+                See All
+              </Text>
+            </TouchableOpacity>
+          </View>
+          <View style={{ marginHorizontal: 24, marginBottom: 16 }}>
+            {recentReports.length === 0 ? (
+              <Text style={{ color: colorScheme === "dark" ? "#94A3B8" : "#64748B" }}>No recent reports.</Text>
+            ) : (
+              recentReports.map((rep) => (
+                <View key={rep.id} style={{
+                  backgroundColor: colorScheme === "dark" ? "#232946" : "#F3F6FD",
+                  borderRadius: 12,
+                  padding: 14,
+                  marginBottom: 10,
+                  flexDirection: "row",
+                  alignItems: "center",
+                  justifyContent: "space-between"
+                }}>
+                  <View>
+                    <Text style={{ fontWeight: "bold", color: colorScheme === "dark" ? "#F8FAFC" : "#0F172A" }}>
+                      {rep.title || "Report"}
+                    </Text>
+                    <Text style={{ color: colorScheme === "dark" ? "#94A3B8" : "#64748B", fontSize: 13 }}>
+                      {rep.status ? rep.status.charAt(0).toUpperCase() + rep.status.slice(1) : ""}
+                    </Text>
+                  </View>
+                  <Text style={{ color: "#FF4757", fontWeight: "bold", fontSize: 13 }}>
+                    {rep.createdAt?.toDate
+                      ? rep.createdAt.toDate().toLocaleDateString()
+                      : ""}
+                  </Text>
+                </View>
+              ))
+            )}
+          </View>
         </Animated.View>
       </ScrollView>
     </SafeAreaView>

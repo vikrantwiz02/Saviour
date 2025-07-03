@@ -35,7 +35,7 @@ export default function AdminTabs() {
         }}
       />
       <Tabs.Screen
-        name="live-monitor"
+        name="livemonitor"
         options={{
           title: "Live Monitor",
           tabBarIcon: ({ color, size }) => (
