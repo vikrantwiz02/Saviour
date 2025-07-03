@@ -1,6 +1,7 @@
 import { initializeApp } from "firebase/app";
 import { initializeAuth, Auth, getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
+import { getStorage } from "firebase/storage";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 const firebaseConfig = {
@@ -31,6 +32,9 @@ try {
 // Initialize Firestore
 const db = getFirestore(app);
 
+// Initialize Storage
+const storage = getStorage(app);
+
 export type AppUser = {
   uid: string;
   email: string | null;
@@ -41,4 +45,4 @@ export type AppUser = {
   fcmToken?: string;
 };
 
-export { app, auth, db };
+export { app, auth, db, storage };

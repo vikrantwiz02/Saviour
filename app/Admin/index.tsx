@@ -121,7 +121,7 @@ export default function AdminHomeScreen() {
       title: "Resources",
       icon: "box",
       color: "#2ED573",
-      route: "/Resources",
+      route: "/Admin-Resources",
       iconSet: "Feather",
     },
     {
@@ -129,7 +129,7 @@ export default function AdminHomeScreen() {
       title: "Reports",
       icon: "file-text",
       color: "#FF4757",
-      route: "/admin/reports",
+      route: "/Admin-Reports",
       iconSet: "Feather",
     },
   ];
