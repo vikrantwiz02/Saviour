@@ -1,5 +1,5 @@
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
-import React, { ReactNode, useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   Dimensions,
   FlatList,
@@ -15,7 +15,9 @@ import {
   Platform,
   Keyboard,
   Animated,
+  Linking,
 } from "react-native";
+import * as Clipboard from "expo-clipboard";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Colors } from "../../constants/Colors";
 import { useColorScheme } from "../../hooks/useColorScheme";
@@ -23,10 +25,6 @@ import { db } from "../../lib/firebase";
 import {
   collection,
   getDocs,
-  doc,
-  updateDoc,
-  deleteDoc,
-  setDoc,
   query,
   where,
 } from "firebase/firestore";
@@ -44,13 +42,9 @@ interface User {
   phone: string;
   role: UserRole;
   status: UserStatus;
-  flagged: boolean;
-  helpHistory?: string[];
-  reports?: string[];
-  logs?: string[];
   createdAt?: any;
   lastLogin?: any;
-  [key: string]: any; // For extra fields
+  [key: string]: any;
 }
 
 const ROLE_COLORS: Record<UserRole | UserStatus, string> = {
@@ -65,8 +59,6 @@ const FILTERS = [
   { label: "All", value: "all", icon: "apps" },
   { label: "Users", value: "users", icon: "person" },
   { label: "Employees", value: "employees", icon: "people" },
-  { label: "Flagged", value: "flagged", icon: "flag" },
-  { label: "Suspended", value: "suspended", icon: "remove-circle" },
 ];
 
 function capitalize(str?: string) {
@@ -151,30 +143,6 @@ function ActionButton({ icon, label, color, onPress, disabled = false }: ActionB
   );
 }
 
-interface CollapsibleSectionProps {
-  title: string;
-  children: ReactNode;
-  defaultOpen?: boolean;
-}
-
-function CollapsibleSection({ title, children, defaultOpen = false }: CollapsibleSectionProps) {
-  const [open, setOpen] = useState(defaultOpen);
-  return (
-    <View style={{ marginBottom: 12 }}>
-      <TouchableOpacity
-        onPress={() => setOpen((o) => !o)}
-        style={{ flexDirection: "row", alignItems: "center", marginBottom: 4 }}
-        accessibilityRole="button"
-        accessibilityLabel={`Toggle ${title} section`}
-      >
-        <Ionicons name={open ? "chevron-down" : "chevron-forward"} size={18} color="#2563eb" />
-        <Text style={{ fontWeight: "bold", fontSize: 15, color: "#2563eb", marginLeft: 4 }}>{title}</Text>
-      </TouchableOpacity>
-      {open && <View style={{ paddingLeft: 18 }}>{children}</View>}
-    </View>
-  );
-}
-
 interface ProfileDetailModalProps {
   visible: boolean;
   user: User | null;
@@ -182,14 +150,9 @@ interface ProfileDetailModalProps {
 }
 
 function ProfileDetailModal({ visible, user, onClose }: ProfileDetailModalProps) {
-  const [tab, setTab] = useState<"Help" | "Reports" | "Logs" | "Info">("Info");
   if (!user) return null;
-  const helpHistory = Array.isArray(user.helpHistory) ? user.helpHistory : [];
-  const reports = Array.isArray(user.reports) ? user.reports : [];
-  const logs = Array.isArray(user.logs) ? user.logs : [];
-  // Show all details
   const infoFields = Object.entries(user)
-    .filter(([k]) => !["helpHistory", "reports", "logs", "id"].includes(k))
+    .filter(([k]) => !["id"].includes(k))
     .map(([k, v]) => (
       <View key={k} style={{ flexDirection: "row", marginBottom: 4 }}>
         <Text style={{ fontWeight: "bold", color: "#2563eb", minWidth: 90 }}>{capitalize(k)}: </Text>
@@ -219,71 +182,8 @@ function ProfileDetailModal({ visible, user, onClose }: ProfileDetailModalProps)
             <Text style={{ color: "#555", fontSize: 13 }}>{user.email}</Text>
             <Text style={{ color: "#555", fontSize: 13 }}>{user.phone}</Text>
           </View>
-          {/* Tabs */}
-          <View style={{ flexDirection: "row", justifyContent: "center", marginBottom: 10 }}>
-            {(["Info", "Help", "Reports", "Logs"] as const).map((t) => (
-              <TouchableOpacity
-                key={t}
-                onPress={() => setTab(t)}
-                style={[
-                  styles.tabBtn,
-                  tab === t && styles.tabBtnActive,
-                  { minWidth: 80 },
-                ]}
-                accessibilityRole="tab"
-                accessibilityLabel={`Show ${t}`}
-              >
-                <Text style={{ color: tab === t ? "#2563eb" : "#555", fontWeight: tab === t ? "bold" : "normal" }}>
-                  {t}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
           <ScrollView style={{ flex: 1 }}>
-            {tab === "Info" && (
-              <CollapsibleSection title="All Details" defaultOpen>
-                {infoFields}
-              </CollapsibleSection>
-            )}
-            {tab === "Help" && (
-              <CollapsibleSection title="Help History" defaultOpen>
-                {helpHistory.length === 0 ? (
-                  <Text style={{ color: "#888" }}>No help requests.</Text>
-                ) : (
-                  helpHistory.map((h: string, i: number) => (
-                    <Text key={i} style={{ color: "#333", marginBottom: 2 }}>
-                      {h}
-                    </Text>
-                  ))
-                )}
-              </CollapsibleSection>
-            )}
-            {tab === "Reports" && (
-              <CollapsibleSection title="Reported Behavior" defaultOpen>
-                {reports.length === 0 ? (
-                  <Text style={{ color: "#888" }}>No reports.</Text>
-                ) : (
-                  reports.map((r: string, i: number) => (
-                    <Text key={i} style={{ color: "#b91c1c", marginBottom: 2 }}>
-                      {r}
-                    </Text>
-                  ))
-                )}
-              </CollapsibleSection>
-            )}
-            {tab === "Logs" && (
-              <CollapsibleSection title="Activity Logs" defaultOpen>
-                {logs.length === 0 ? (
-                  <Text style={{ color: "#888" }}>No logs.</Text>
-                ) : (
-                  logs.map((l: string, i: number) => (
-                    <Text key={i} style={{ color: "#333", marginBottom: 2 }}>
-                      {l}
-                    </Text>
-                  ))
-                )}
-              </CollapsibleSection>
-            )}
+            <View style={{ paddingLeft: 18, paddingTop: 8 }}>{infoFields}</View>
           </ScrollView>
         </View>
       </View>
@@ -293,7 +193,7 @@ function ProfileDetailModal({ visible, user, onClose }: ProfileDetailModalProps)
 
 export default function ManagementScreen() {
   const colorScheme = useColorScheme() ?? "light";
-  const [filter, setFilter] = useState<"all" | "users" | "employees" | "flagged" | "suspended">("all");
+  const [filter, setFilter] = useState<"all" | "users" | "employees">("all");
   const [search, setSearch] = useState("");
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
@@ -312,15 +212,10 @@ export default function ManagementScreen() {
     let q = collection(db, "users");
     let userQuery: any = q;
     try {
-      // Only use Firestore filter if search is empty
       if (filter === "users" && !search) {
         userQuery = query(q, where("role", "==", "users"));
       } else if (filter === "employees" && !search) {
         userQuery = query(q, where("role", "==", "employee"));
-      } else if (filter === "flagged" && !search) {
-        userQuery = query(q, where("flagged", "==", true));
-      } else if (filter === "suspended" && !search) {
-        userQuery = query(q, where("status", "in", ["suspended", "Suspended"]));
       }
       const snap = await getDocs(userQuery);
       const data: User[] = [];
@@ -328,21 +223,16 @@ export default function ManagementScreen() {
         const d = docSnap.data() as any;
         data.push({
           id: docSnap.id,
-          name: capitalize(d.name),
+          name: capitalize(d.fullName || d.name),
           email: d.email,
           phone: d.phone,
           role: capitalize(d.role) as UserRole,
           status: capitalize(d.status) as UserStatus,
-          flagged: !!d.flagged,
-          helpHistory: Array.isArray(d.helpHistory) ? d.helpHistory : [],
-          reports: Array.isArray(d.reports) ? d.reports : [],
-          logs: Array.isArray(d.logs) ? d.logs : [],
           createdAt: d.createdAt,
           lastLogin: d.lastLogin,
           ...d,
         });
       });
-      // JS filtering for search
       let filtered = data;
       if (search) {
         filtered = data.filter((u) =>
@@ -352,8 +242,6 @@ export default function ManagementScreen() {
         );
         if (filter === "users") filtered = filtered.filter((u) => u.role.toLowerCase() === "users");
         if (filter === "employees") filtered = filtered.filter((u) => u.role.toLowerCase() === "employee");
-        if (filter === "flagged") filtered = filtered.filter((u) => u.flagged);
-        if (filter === "suspended") filtered = filtered.filter((u) => u.status.toLowerCase() === "suspended");
       }
       setUsers(filtered);
     } catch (e) {
@@ -367,82 +255,9 @@ export default function ManagementScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filter, search]);
 
-  // Actions
-  const handleSuspend = async (user: User) => {
-    Alert.alert(
-      "Suspend User",
-      `Are you sure you want to suspend ${capitalize(user.name)}?`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Suspend",
-          style: "destructive",
-          onPress: async () => {
-            try {
-              await setDoc(doc(db, "suspended_users", user.id), {
-                ...user,
-                status: "Suspended",
-                logs: [...(user.logs || []), "Suspended " + new Date().toISOString().slice(0, 10)],
-              });
-              await deleteDoc(doc(db, "users", user.id));
-              fetchUsers();
-            } catch (e) {
-              Alert.alert("Error", "Failed to suspend user. Make sure you are logged in as admin and Firestore rules allow admin access.");
-            }
-          },
-        },
-      ]
-    );
-  };
-
-  const handleDelete = async (user: User) => {
-    Alert.alert(
-      "Delete User",
-      `Are you sure you want to delete ${capitalize(user.name)}?`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Delete",
-          style: "destructive",
-          onPress: async () => {
-            try {
-              await setDoc(doc(db, "deleted_users", user.id), {
-                ...user,
-                logs: [...(user.logs || []), "Deleted " + new Date().toISOString().slice(0, 10)],
-              });
-              await deleteDoc(doc(db, "users", user.id));
-              fetchUsers();
-            } catch (e) {
-              Alert.alert("Error", "Failed to delete user. Make sure you are logged in as admin and Firestore rules allow admin access.");
-            }
-          },
-        },
-      ]
-    );
-  };
-
-  const handlePromote = async (user: User) => {
-    Alert.alert(
-      "Promote User",
-      `Promote ${capitalize(user.name)} to Employee?`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Promote",
-          onPress: async () => {
-            try {
-              await updateDoc(doc(db, "users", user.id), {
-                role: "Employee",
-                logs: [...(user.logs || []), "Promoted " + new Date().toISOString().slice(0, 10)],
-              });
-              fetchUsers();
-            } catch (e) {
-              Alert.alert("Error", "Failed to promote user. Make sure you are logged in as admin and Firestore rules allow admin access.");
-            }
-          },
-        },
-      ]
-    );
+  const handleCopyEmail = (email: string) => {
+    Clipboard.setStringAsync(email);
+    Alert.alert("Copied", "Email copied to clipboard.");
   };
 
   // --- Filter Bar Scrollbar Logic ---
@@ -553,9 +368,6 @@ export default function ManagementScreen() {
                   <StatusDot status={item.status} />
                   <Text style={{ fontWeight: "bold", fontSize: 16, color: "#222" }}>{capitalize(item.name)}</Text>
                   <RoleTag role={item.role} status={item.status} />
-                  {item.flagged && (
-                    <MaterialCommunityIcons name="flag" size={18} color="#f59e42" style={{ marginLeft: 4 }} accessibilityLabel="Flagged user" />
-                  )}
                 </View>
                 <Text style={{ color: "#555", fontSize: 13, marginTop: 2 }}>{item.email}</Text>
                 <Text style={{ color: "#555", fontSize: 13 }}>{item.phone}</Text>
@@ -570,26 +382,23 @@ export default function ManagementScreen() {
                     }}
                   />
                   <ActionButton
-                    icon="remove-circle"
-                    label="Suspend"
-                    color="#ef4444"
-                    onPress={() => handleSuspend(item)}
-                    disabled={item.status === "Suspended"}
+                    icon="mail"
+                    label="Send Email"
+                    color="#2563eb"
+                    onPress={() => Linking.openURL(`mailto:${item.email}`)}
                   />
                   <ActionButton
-                    icon="trash"
-                    label="Delete"
-                    color="#b91c1c"
-                    onPress={() => handleDelete(item)}
+                    icon="call"
+                    label="Call"
+                    color="#22c55e"
+                    onPress={() => Linking.openURL(`tel:${item.phone}`)}
                   />
-                  {item.role === "Users" && (
-                    <ActionButton
-                      icon="arrow-up-circle"
-                      label="Promote"
-                      color="#22c55e"
-                      onPress={() => handlePromote(item)}
-                    />
-                  )}
+                  <ActionButton
+                    icon="copy"
+                    label="Copy Email"
+                    color="#a21caf"
+                    onPress={() => handleCopyEmail(item.email)}
+                  />
                 </View>
               </View>
             )}
@@ -687,18 +496,8 @@ const styles = StyleSheet.create({
     width: isTablet ? 420 : "95%",
     maxHeight: "90%",
     backgroundColor: "#fff",
-    borderRadius: 18,
+     borderRadius: 18,
     padding: 18,
     elevation: 6,
-  },
-  tabBtn: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 10,
-    backgroundColor: "#f1f5f9",
-    marginHorizontal: 4,
-  },
-  tabBtnActive: {
-    backgroundColor: "#dbeafe",
   },
 });
