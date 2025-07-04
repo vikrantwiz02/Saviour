@@ -166,7 +166,7 @@ type ResourceRequest = {
   contactNumber: string;
 };
 
-const AdminResourcesScreen = () => {
+const EmployeeResourcesScreen = () => {
   const colorScheme = useColorScheme() ?? "light";
   const colors = modernTheme[colorScheme];
   const currentUser = auth.currentUser;
@@ -1993,4 +1993,4 @@ const styles = StyleSheet.create({
   },
 });
 
-export default AdminResourcesScreen;
+export default EmployeeResourcesScreen;

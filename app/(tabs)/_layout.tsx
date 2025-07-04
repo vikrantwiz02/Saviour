@@ -4,7 +4,7 @@ import { useColorScheme } from "@/hooks/useColorScheme";
 import { Colors } from "@/constants/Colors";
 import { View, StyleSheet } from "react-native";
 import { useEffect } from "react";
-import { useAuth } from "@/context/AuthContext"; // <-- Make sure this exists
+import { useAuth } from "@/context/AuthContext";
 
 export default function TabLayout() {
   const colorScheme = useColorScheme() ?? "light";
