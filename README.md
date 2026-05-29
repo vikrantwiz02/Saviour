@@ -285,7 +285,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
         <sub><b>Vikrant Kumar</b></sub>
       </a>
       <br />
-      <small>Team</small>
+      <small>Team Lead</small>
       <br />
       <a href="mailto:vikrantkrd@gmail.com">Email</a>
     </td>
